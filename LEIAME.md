@@ -41,6 +41,7 @@ python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # quebras de cache classificadas: ttl / prune / resume / ...
 python tools/ttl.py --last 0             # taxa de quebra por intervalo ocioso
 python tools/rewrites.py --last 0        # re-escritas sem gap: o que mudou antes do histórico
+python tools/diverge.py                  # log do proxy: em cada quebra, o primeiro byte que difere da chamada anterior
 ```
 
 `tools/cache-proxy.py` é um proxy local que registra o uso por chamada e

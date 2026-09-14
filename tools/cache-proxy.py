@@ -24,6 +24,9 @@ Code treats the proxy as a third-party endpoint and loses the 1M window.
 
 Log: ~/.claude/cache-proxy.log (jsonl, one line per call, real or ping).
 Last body without headers: ~/.claude/cache-proxy-last.json (inspection).
+With CACHE_PROXY_KEEP_BODIES=N (default 200) every main-conversation body is
+also saved to ~/.claude/cache-proxy-bodies/<ts>-<sha>.json (oldest deleted
+beyond N) so tools/diverge.py can diff a cache break against the call before.
 """
 import copy, hashlib, http.client, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +39,8 @@ PING_MAX = int(os.environ.get("CACHE_PING_MAX", "9"))
 HOME = os.path.expanduser("~")
 LOG = os.path.join(HOME, ".claude", "cache-proxy.log")
 LAST = os.path.join(HOME, ".claude", "cache-proxy-last.json")
+BODIES = os.path.join(HOME, ".claude", "cache-proxy-bodies")
+KEEP_BODIES = int(os.environ.get("CACHE_PROXY_KEEP_BODIES", "200"))
 DROP_REQ = {"host", "content-length", "accept-encoding", "connection", "transfer-encoding"}
 DROP_RESP = {"transfer-encoding", "content-length", "connection", "content-encoding"}
 
@@ -48,6 +53,17 @@ def log(rec):
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     print(json.dumps(rec, ensure_ascii=False), flush=True)
+
+
+def save_body(parsed, sha):
+    """Keep the last KEEP_BODIES request bodies on disk, one file per call."""
+    os.makedirs(BODIES, exist_ok=True)
+    name = time.strftime("%Y%m%dT%H%M%S") + "-" + sha + ".json"
+    with open(os.path.join(BODIES, name), "w", encoding="utf-8") as f:
+        json.dump(parsed, f, ensure_ascii=False)
+    old = sorted(n for n in os.listdir(BODIES) if n.endswith(".json"))
+    for n in old[:-KEEP_BODIES]:
+        os.remove(os.path.join(BODIES, n))
 
 
 def usage_from(text, stream):
@@ -229,6 +245,8 @@ class H(BaseHTTPRequestHandler):
                 try:
                     with open(LAST, "w", encoding="utf-8") as f:
                         json.dump(parsed, f, ensure_ascii=False)
+                    if KEEP_BODIES > 0:
+                        save_body(parsed, hashlib.sha256(body).hexdigest()[:12])
                 except Exception:
                     pass
         log({"kind": "real", "status": resp.status, "model": (parsed or {}).get("model"), "stream": stream,

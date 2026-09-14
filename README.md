@@ -38,6 +38,7 @@ python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # cache breaks classified: ttl / prune / resume / ...
 python tools/ttl.py --last 0             # break rate by idle gap
 python tools/rewrites.py --last 0        # full re-writes with no gap: what changed before the history
+python tools/diverge.py                  # proxy log: for each break, the first byte that differs from the call before
 ```
 
 `tools/cache-proxy.py` is a local proxy that logs per-call usage from the API

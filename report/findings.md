@@ -136,6 +136,10 @@ message and should sit after the cached history; yet ~1 user turn in 120 on
 current versions re-writes the whole prefix when a hook has spoken. If you run
 `UserPromptSubmit` hooks that return `additionalContext` (this repo's
 `context-guard.js` does, only above the limit), this is a cost to know about.
+To find the mechanism, run a session through `tools/cache-proxy.py` (it now
+keeps every request body) until a break lands, then `tools/diverge.py`
+prints the first byte that differs from the call before, in cache order.
+Not done yet: the proxy log had no break at the time of writing.
 
 The remaining 1,059 events (502M tokens) have nothing in the log between the
 calls that should touch the prefix. They are **concentrated by version and
