@@ -87,14 +87,71 @@ end-to-end yet; the log it writes is what you would measure it with.
 
 Median re-write 431k tokens, max 980k.
 
-The `partial` bucket is the honest gap in this classification: something
-after the shared prefix changed with no idle gap, no model change and no
-visible shrink. The 30-session report identified four of those as
-microcompact events (tool results cleared in place, `cache_read` collapsing to
-the shared prefix). Over 641 sessions the bucket is too large to be only that;
-skill loads, `cache_edits`, and the system prompt changing mid-session are all
-candidates. Not analysed further. If you dig into it, `breaks.py --top 50`
-gives you the call numbers.
+### 4.1 The `partial` bucket, opened (`python tools/rewrites.py --last 0`)
+
+1,209 of the 1,336 `partial` events (99% of their tokens) have `cache_read`
+equal to the **shared** prefix (48,193 / 47,285 / 24,247 depending on the
+version) while the context did not shrink: the history was intact but not
+reusable, so whatever sits *before* it — the project part of the system
+prompt, tool schemas, request parameters, or the first message — changed
+between two consecutive calls. Over all 132,016 call boundaries with no gap,
+no model switch and no shrink, this happens 0.9% of the time. Where:
+
+| boundary | n | full re-write | rate |
+|---|---|---|---|
+| after a **user turn** (previous call ended with text) | 82,342 | 1,118 | **1.4%** |
+| after a tool call | 49,674 | 102 | 0.2% |
+
+The new user turn is where the client re-renders the prefix. Events found in
+the transcript between the two calls, and the re-write rate when present:
+
+| event between the calls | n | rate |
+|---|---|---|
+| `ultra_effort_enter` (effort level changed) | 169 | **30.8%** |
+| `deferred_tools_delta` (tool list changed) | 622 | 10.6% |
+| `mcp_instructions_delta` (MCP server (re)connected) | 421 | 10.2% |
+| `skill_listing` (skills list changed) | 232 | 9.5% |
+| `hook_additional_context` (a hook injected context) | 5,877 | 8.3% |
+| `model_refusal_fallback` | 22 | 77% |
+| baseline (any boundary) | 132,016 | 0.9% |
+
+The first four change the request prefix by construction (parameters, tool
+schemas, system prompt), so those 161 events (65M tokens) have a visible
+cause. **Changing effort mid-session is the one that costs the most per
+event** and is the easiest to avoid: pick the effort before the long session.
+The hook correlation is one session with 835 hook injections; not separated
+from the version effect below.
+
+The remaining 1,059 events (502M tokens) have nothing in the log between the
+calls that should touch the prefix. They are **concentrated by version and
+by session**, which points at client bugs, not at anything the user did:
+
+| Claude Code version | boundaries | re-wrote | rate |
+|---|---|---|---|
+| 2.1.215 | 1,288 | 419 | **32.5%** |
+| 2.1.170 | 1,838 | 56 | 3.0% |
+| 2.1.181 / 2.1.202 / 2.1.209 | 15,763 | 283 | 1.8% |
+| 2.1.197 / 2.1.227 / 2.1.177 | 7,210 | 94 | 1.3% |
+| 2.1.219 / 2.1.221 / 2.1.205 | 18,335 | 156 | 0.9% |
+| 2.1.229 / 2.1.222 | 19,060 | 94 | 0.5% |
+| **2.1.237 and later** | **60,000+** | **71** | **0.1–0.2%** |
+
+One session on 2.1.215 (Sonnet 5, 992 calls, 16 h, July 2026) holds 417
+of them: from call 496 at ~566k context to the end, nearly every call
+re-wrote ~520k with only the 48k shared prefix cached — 216M tokens in one
+session. The only transcript line between the last cached call and the
+first re-written one is a `custom-title` update. A second session (2.1.181,
+8,807 calls) holds 130, most at ~990k context. Whatever it was, it is gone
+after 2.1.237: 36 unexplained events in 60k+ boundaries, 11.9M tokens.
+
+Rate also rises with context size (0.4% under 200k → 1.9% at 500–800k),
+but that is mostly the same two sessions.
+
+What this changes in the numbers above: of the 80% of writes attributed to
+breaks, roughly half came from an old-version client bug that no longer
+reproduces; TTL (26%) and resume (6%) are the mechanisms that remain. For a
+current user the actionable list is: idle > 60 min, resume, model switch,
+effort change, MCP reconnect mid-session.
 
 ## 5. `skillOverrides` per project: real, small (−4.5% of the prefix)
 

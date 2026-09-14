@@ -14,7 +14,9 @@ tools to measure your own and four hooks that act on what was found.
 - **80% of all cache writes come from a few large re-writes**, not steady
   growth: an idle gap over 60 min (the 1h TTL) breaks the cache 93–97% of
   the time; under 20 min, 1–7%. Resume and model switch re-write the whole
-  history behind a 49k shared prefix.
+  history behind a 49k shared prefix. Changing the effort level mid-session
+  re-writes it 31% of the time; a large share of the rest was a client bug
+  that stopped reproducing after 2.1.237.
 - **The session `.jsonl` overstates usage 1.7×** unless you dedup by
   `(message.id, requestId)` — one line per content block, same `usage` on each.
 - `skillOverrides` saves 4.5% of the prefix (~2.7k tokens/call); plugin skills
@@ -35,6 +37,7 @@ python tools/sessions.py                 # per-session usage, dedup, cost split
 python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # cache breaks classified: ttl / prune / resume / ...
 python tools/ttl.py --last 0             # break rate by idle gap
+python tools/rewrites.py --last 0        # full re-writes with no gap: what changed before the history
 ```
 
 `tools/cache-proxy.py` is a local proxy that logs per-call usage from the API

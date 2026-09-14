@@ -16,7 +16,9 @@ encontrado.
   do crescimento normal: um intervalo ocioso acima de 60 min (o TTL de 1h)
   quebra o cache em 93–97% das vezes; abaixo de 20 min, 1–7%. Resume e troca
   de modelo re-escrevem o histórico inteiro atrás de um prefixo compartilhado
-  de 49k.
+  de 49k. Trocar o nível de esforço no meio da sessão re-escreve em 31%
+  das vezes; boa parte do resto era bug do cliente que parou de reproduzir
+  depois da 2.1.237.
 - **O `.jsonl` da sessão infla o uso 1,7×** se você não deduplicar por
   `(message.id, requestId)` — uma linha por bloco de conteúdo, mesmo `usage`
   em todas.
@@ -38,6 +40,7 @@ python tools/sessions.py                 # uso por sessão, dedup, divisão do c
 python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # quebras de cache classificadas: ttl / prune / resume / ...
 python tools/ttl.py --last 0             # taxa de quebra por intervalo ocioso
+python tools/rewrites.py --last 0        # re-escritas sem gap: o que mudou antes do histórico
 ```
 
 `tools/cache-proxy.py` é um proxy local que registra o uso por chamada e
