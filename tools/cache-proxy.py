@@ -8,10 +8,12 @@ TTL. Measured 2026-09-14 on 641 sessions: a gap >= 60 min between calls broke
 the cache 93-98% of the time; 10-59 min, 8-25%, rising with the gap. Hence the
 default ping every 20 min, at most CACHE_PING_MAX times per idle stretch.
 
-Status of the keep-alive: EXPERIMENTAL. Each ping is a cache read of the whole
-context (0.1x price), so on a 300k context a ping costs ~30k input-equivalent
-tokens. Whether it pays depends on how often you come back after 20-60 min;
-the log lets you measure that. The usage logger alone is safe to use always.
+Measured 2026-09-14 (Opus 5, 1h cache, thinking adaptive): 8 pings over 2h20
+of idle, every one a hit (cr 48,055 = the original write), zero cache writes,
+1 output token each -- a cache hit refreshes the 1h TTL. Each ping is a cache
+read of the whole context (0.1x price); against a TTL re-write at 2x the
+break-even is ~20 pings (~7 h idle). Details in report/findings.md section 3.
+The usage logger alone is safe to use always.
 
     python tools/cache-proxy.py                 # listens on 127.0.0.1:8790
     curl -X POST http://127.0.0.1:8790/_ping    # ping now

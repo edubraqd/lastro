@@ -43,7 +43,7 @@ python tools/diverge.py                  # proxy log: for each break, the first 
 
 `tools/cache-proxy.py` is a local proxy that logs per-call usage from the API
 response and (experimental) pings the API every 20 idle minutes to
-keep the 1h cache warm. Launch through it with `tools/wrap-cache.sh` or
+keep the 1h cache warm (measured: a hit refreshes the TTL; 8/8 pings hit over 2h20). Launch through it with `tools/wrap-cache.sh` or
 `tools/wrap-cache.ps1`. Read the docstring before using the keep-alive: each
 ping costs a full cache read of the current context.
 

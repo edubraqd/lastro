@@ -65,10 +65,39 @@ not the TTL. Practical rule: if you are stepping away for more than an hour on
 a large context, `/compact` or write a handoff and `/clear` before you go;
 coming back re-writes the whole history at 2× write price.
 
-`tools/cache-proxy.py` has an experimental keep-alive (re-send the last body
-with `max_tokens=1` every 20 min of idle). Each ping is a full cache read
-(0.1×) of the current context, so it only pays if you come back. Not measured
-end-to-end yet; the log it writes is what you would measure it with.
+On the hits, `cache_read / previous context` has median 1.0003: the prefix
+is byte-stable across an idle turn. Below 60 min the re-writes that do happen
+grow with the gap (8% → 25%) and not with context size (8–11% in every band
+from 50k to 1.1M), and what survives is always the shared system+tools block
+only — that looks like eviction of the conversation blocks ahead of TTL,
+not client-side drift.
+
+**Keep-alive, measured.** `tools/cache-proxy.py` stores the last streaming
+`/v1/messages` body and, after 20 min idle, replays it with `stream: false,
+max_tokens: 1` every 20 min. One `claude -p` session, Opus 5, 1h cache,
+`thinking: adaptive` (accepted `max_tokens: 1`), 2026-09-14:
+
+```
+00:28:30 real   cc 13,602  cr 34,453  out 22     <- the write
+00:28:36 ping   cc 0       cr 48,055  out 1
+00:49:03 ping   cc 0       cr 48,055  out 1      idle 21 min
+01:09:04 ping   cc 0       cr 48,055  out 1      idle 41
+01:29:06 ping   cc 0       cr 48,055  out 1      idle 61   <- past the original TTL; hit only because 01:09 refreshed it
+01:49:07 ping   cc 0       cr 48,055  out 1      idle 81
+02:09:08 ping   cc 0       cr 48,055  out 1      idle 101
+02:29:09 ping   cc 0       cr 48,055  out 1      idle 121
+02:49:11 ping   cc 0       cr 48,055  out 1      idle 141
+```
+
+48,055 = 13,602 + 34,453. Eight pings, 8 output tokens, zero cache writes,
+OAuth headers still valid at 2h20. **A cache hit refreshes the 1h TTL.** Each
+ping costs 0.1× of the current context; against a TTL re-write at 2× the
+break-even is ~20 pings, i.e. ~7 hours of idle per event — it pays whenever
+you come back the same day. Posted as a
+[comment on #94177](https://github.com/anthropics/claude-code/issues/94177#issuecomment-5662890763).
+Two pitfalls if you rebuild it: the Haiku side-call (title / classifier)
+arrives ~1 s after the main call and must not be the body that gets replayed;
+on Windows `SO_REUSEADDR` lets two listeners bind the same port.
 
 ## 4. Cache breaks by cause
 
