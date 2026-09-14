@@ -119,8 +119,23 @@ The first four change the request prefix by construction (parameters, tool
 schemas, system prompt), so those 161 events (65M tokens) have a visible
 cause. **Changing effort mid-session is the one that costs the most per
 event** and is the easiest to avoid: pick the effort before the long session.
-The hook correlation is one session with 835 hook injections; not separated
-from the version effect below.
+The hook correlation survives the controls. Restricting to user turns
+(the hook only fires there), dropping every boundary with a known prefix
+event and the two outlier sessions of the next paragraph:
+
+| user-turn boundary | n | re-wrote | rate |
+|---|---|---|---|
+| a `UserPromptSubmit` hook injected context — all versions | 4,500 | 264 | **5.87%** |
+| no hook context — all versions | 70,089 | 203 | 0.29% |
+| hook — 2.1.237 and later | 1,489 | 12 | 0.81% |
+| no hook — 2.1.237 and later | 32,962 | 19 | 0.06% |
+
+20× overall, 13× on current versions, spread over 10+ sessions (0–28% per
+session). Mechanism unknown: the injected text is an attachment to the user
+message and should sit after the cached history; yet ~1 user turn in 120 on
+current versions re-writes the whole prefix when a hook has spoken. If you run
+`UserPromptSubmit` hooks that return `additionalContext` (this repo's
+`context-guard.js` does, only above the limit), this is a cost to know about.
 
 The remaining 1,059 events (502M tokens) have nothing in the log between the
 calls that should touch the prefix. They are **concentrated by version and
@@ -144,14 +159,16 @@ first re-written one is a `custom-title` update. A second session (2.1.181,
 8,807 calls) holds 130, most at ~990k context. Whatever it was, it is gone
 after 2.1.237: 36 unexplained events in 60k+ boundaries, 11.9M tokens.
 
-Rate also rises with context size (0.4% under 200k → 1.9% at 500–800k),
-but that is mostly the same two sessions.
+Rate also rises with context size (0.4% under 200k → 1.9% at 500–800k).
+Without the two outlier sessions the slope flattens to 0.39% → 0.95% but does
+not vanish, in both eras (old 0.69% → 1.27%; current 0.11% → 0.21%).
 
 What this changes in the numbers above: of the 80% of writes attributed to
 breaks, roughly half came from an old-version client bug that no longer
 reproduces; TTL (26%) and resume (6%) are the mechanisms that remain. For a
 current user the actionable list is: idle > 60 min, resume, model switch,
-effort change, MCP reconnect mid-session.
+effort change, MCP reconnect mid-session, and hooks that inject context on
+every prompt.
 
 ## 5. `skillOverrides` per project: real, small (−4.5% of the prefix)
 
