@@ -27,19 +27,12 @@ import os
 import statistics
 import sys
 from collections import Counter
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import iter_calls, transcripts  # noqa: E402
+from _common import ts  # noqa: E402
 
 import json
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def ts(s):
-    return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 def compact_timestamps(path):

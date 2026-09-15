@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+        python: ["3.8", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: every script compiles
+        shell: bash
+        run: python -m py_compile tools/*.py hooks/install.py experiments/ab-config-vs-bare/*.py
+      - name: tools and hooks
+        run: python -m unittest discover -s tests -v
+      - name: every tool runs against an empty config dir
+        shell: bash
+        env:
+          CLAUDE_CONFIG_DIR: ${{ runner.temp }}/empty-claude
+        run: |
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          python tools/first_call.py
+          python tools/ledger.py --help > /dev/null
+          python tools/breaks.py --help > /dev/null
+          python tools/ttl.py --help > /dev/null
+          python tools/rewrites.py --help > /dev/null
+          python tools/diverge.py --help > /dev/null
+          python tools/issues.py --help > /dev/null
+          python hooks/install.py --dry-run > /dev/null

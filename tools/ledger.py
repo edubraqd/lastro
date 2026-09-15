@@ -26,13 +26,10 @@ import os
 import statistics
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import transcripts  # noqa: E402
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+from _common import ts  # noqa: E402
 
 SKIP = {"assistant", "user", "queue-operation", "last-prompt"}
 # events that change the request prefix by construction (see rewrites.py)
@@ -43,10 +40,6 @@ PREFIX_EVENTS = {
     "attachment:goal_status", "attachment:remote_session_change", "attachment:auto_mode",
     "permission-mode", "attachment:date_change",
 }
-
-
-def ts(s):
-    return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 def load(path, seen):

@@ -22,16 +22,14 @@ import os
 import statistics
 import sys
 
-CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _common import CLAUDE_DIR  # noqa: E402,F401  (also fixes stdout encoding)
 
 # A resumed or forked session copies the whole transcript into a new file, so the
 # same API calls appear in two files. This set is shared across every transcript
 # read in one run; process files oldest-first so the original keeps its calls
 # and the copy only counts what it added.
 GLOBAL_SEEN = set()
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def iter_calls(path, seen=None):

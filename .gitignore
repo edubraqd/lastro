@@ -14,3 +14,6 @@ experiments/*/fixture_*/
 
 # issue study copies: 41 MB of GitHub text, regenerate with tools/issues.py --fetch
 data/issues/*/md/
+
+# one-afternoon probes and drafts of issue comments; not part of the tool set
+scratch/

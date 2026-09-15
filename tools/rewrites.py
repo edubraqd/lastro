@@ -21,10 +21,7 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import transcripts  # noqa: E402
-from breaks import ts  # noqa: E402
-
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+from _common import ts  # noqa: E402
 
 # events that change the request prefix (tools, system prompt, params) — a
 # re-write right after one of these has a visible cause

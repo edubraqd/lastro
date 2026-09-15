@@ -13,16 +13,12 @@ import argparse
 import os
 import sys
 from collections import Counter
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import iter_calls, transcripts  # noqa: E402
+from _common import ts  # noqa: E402
 
 BUCKETS = [(0, 2), (2, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60), (60, 90), (90, 180), (180, 1e9)]
-
-
-def ts(s):
-    return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

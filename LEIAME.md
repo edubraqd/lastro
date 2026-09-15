@@ -53,7 +53,8 @@ como [anthropics/claude-code#94177](https://github.com/anthropics/claude-code/is
 
 ## Medir as suas sessões
 
-Python 3.8+, só stdlib. Lê `~/.claude/projects/*/*.jsonl`; não escreve nada.
+Python 3.8+, só stdlib. Lê `~/.claude/projects/*/*.jsonl` (ou
+`$CLAUDE_CONFIG_DIR/projects`); não escreve nada.
 
 ```bash
 python tools/ledger.py                   # a tabela do SAVINGS.md nos seus transcripts
@@ -124,8 +125,19 @@ correlaciona com re-escrita completa do prefixo em 0,8% dos turnos de usuário
 contra 0,06% sem (versões atuais). O `context-guard.js` só fala acima do
 limite por isso.
 
-Teste: `python tests/test_hooks.py` (precisa de `node`; usa um diretório de
-configuração temporário, não toca em `~/.claude`).
+## Testes
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+`tests/test_tools.py` roda cada ferramenta contra um transcript sintético
+(`tests/fixture.py`: blocos de conteúdo duplicados, uma cópia de resume, uma
+quebra de cache de cada tipo) e confere o dedup, o classificador e os números
+que cada uma imprime — inclusive em console `cp1252`. `tests/test_hooks.py`
+roda os quatro hooks e o instalador (precisa de `node`). Os dois usam um
+`CLAUDE_CONFIG_DIR` temporário e não tocam em `~/.claude`. O CI roda a suíte
+em Ubuntu e Windows, Python 3.8 e 3.12.
 
 ## Ressalvas
 

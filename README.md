@@ -49,7 +49,8 @@ Write-ups: [report/cache-forensics.md](report/cache-forensics.md) (filed as
 
 ## Measure your own sessions
 
-Python 3.8+, stdlib only. Reads `~/.claude/projects/*/*.jsonl`; writes nothing.
+Python 3.8+, stdlib only. Reads `~/.claude/projects/*/*.jsonl` (or
+`$CLAUDE_CONFIG_DIR/projects`); writes nothing.
 
 ```bash
 python tools/ledger.py                   # the SAVINGS table on your transcripts
@@ -120,8 +121,19 @@ correlates with a full prefix re-write on 0.8% of user turns vs 0.06% without
 (current versions). `context-guard.js` only speaks above the limit for that
 reason.
 
-Test: `python tests/test_hooks.py` (needs `node`; uses a temporary config dir,
-touches nothing under `~/.claude`).
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+`tests/test_tools.py` runs every tool against a synthetic transcript
+(`tests/fixture.py`: duplicated content blocks, a resume copy, one cache break
+of each kind) and checks the dedup, the classifier, and the numbers each
+tool prints — including under a `cp1252` console. `tests/test_hooks.py` runs
+the four hooks and the installer (needs `node`). Both use a temporary
+`CLAUDE_CONFIG_DIR` and touch nothing under `~/.claude`. CI runs the suite on
+Ubuntu and Windows, Python 3.8 and 3.12.
 
 ## Caveats
 
