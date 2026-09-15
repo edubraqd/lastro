@@ -64,6 +64,7 @@ python tools/ttl.py --last 0             # taxa de quebra por intervalo ocioso
 python tools/rewrites.py --last 0        # re-escritas sem gap: o que mudou antes do histórico
 python tools/first_call.py               # 1ª chamada de cada sessão: o que um início quente lê de outras sessões (#94417)
 python tools/diverge.py                  # log do proxy: em cada quebra, o primeiro byte que difere da chamada anterior
+python tools/issues.py --top 40          # GitHub: issues do claude-code sobre cache/contexto/custo, por reações (precisa de GITHUB_TOKEN ou gh)
 ```
 
 `tools/cache-proxy.py` é um proxy local que registra o uso por chamada e
