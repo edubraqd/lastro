@@ -81,7 +81,7 @@ class HooksTest(unittest.TestCase):
     def test_handoff_load(self):
         o = self.run_hook('handoff-load', {'source': 'startup', 'cwd': self.cwd})
         t = o['hookSpecificOutput']['additionalContext']
-        self.assertIn('**ctx · t<N>', t, 'canary gen1 default name')
+        self.assertIn('**Lastro · t<N>', t, 'canary gen1 default name')
         self.assertNotIn('gen 2', t)
         with open(os.path.join(self.proj, 'handoff-abcdef12.md'), 'w', encoding='utf-8') as fh:
             fh.write('# Handoff\n- done: X\n')

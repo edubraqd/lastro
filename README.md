@@ -1,10 +1,86 @@
-# claude-context-forensics
+# Lastro
 
-Where the tokens go in Claude Code — measured on 674 real sessions and one
-controlled A/B — plus the tools to measure your own, a cold ledger of what
-each lever is actually worth, and four hooks that act on what was found.
+**The receipt behind your Claude Code bill — and the brake on its most
+expensive part.**
 
 *Português: [LEIAME.md](LEIAME.md).*
+
+## What makes you spend more than you need
+
+Measured on 674 real sessions from one user (not an estimate):
+
+1. **Every message re-sends the whole conversation.** In a long session the
+   average call re-sends ~320k tokens. Re-reading that history is **62% of
+   the bill**. What you type is a sliver; what weighs is everything before it.
+2. **Stepping away for more than an hour costs a rebuild.** The cache lives
+   1 hour. A longer gap forces Claude to re-write the entire conversation
+   **93–97% of the time**; under 20 minutes, 1–7%. Those re-writes are **80%
+   of everything spent on cache writes**. Switching model or resuming an old
+   session (`--resume`) does the same.
+3. **Letting the session grow without clearing.** Session length moves the
+   bill more than anything else: at 200k tokens, every reply re-sends 200k
+   tokens. And an instruction given early can fall out of what Claude still
+   sees — Lastro measures that instead of guessing (the top line, below).
+
+The fix is simple and nobody does it at the right moment: **before leaving,
+save a summary of what was done and clear the conversation (`/clear`)**. When
+you come back, Claude reads the summary instead of re-reading everything.
+Lastro does it for you.
+
+## What Lastro does on your screen
+
+Four small automations (hooks) that run inside Claude Code:
+
+| when | what you see |
+|---|---|
+| the conversation passes 150k tokens | Claude writes a summary of the work to `.claude/handoff-<session>.md` before stopping. Nothing is lost. |
+| it passes 200k | in every reply Claude says it is heavy and asks you for `/clear`. |
+| you `/clear` or open a new session | the summary is loaded on its own and work resumes where it stopped. |
+| every reply after that | the first line is `**Lastro · t3 · ctx ok**`: the number goes up each reply and `ok / aging / thin` says whether Claude still remembers the decisions. If the line **disappears**, it already forgot — time to `/clear`. |
+| Claude reads half a file | it is told how many lines remain, so it does not start over. |
+
+None of them sends data off your machine.
+
+## Install (3 steps)
+
+Needs [Node.js](https://nodejs.org) and [Python 3.8+](https://www.python.org)
+installed — both are "download, next, next".
+
+```bash
+git clone https://github.com/edubraqd/lastro
+```
+```bash
+cd lastro
+```
+```bash
+python hooks/install.py
+```
+
+Done. Close and reopen Claude Code. To put your name on the top line, add to
+`~/.claude/settings.json`:
+
+```json
+"env": { "CANARY_NAME": "YourName" }
+```
+
+(`"CONTEXT_LANG": "pt"` switches the messages to Portuguese.) Uninstall:
+`python hooks/install.py --uninstall`. See what would change first: `--dry-run`.
+
+## How much you spent
+
+```bash
+python tools/ledger.py
+```
+
+Reads the logs Claude Code already keeps on your machine
+(`~/.claude/projects`) and prints, in API list-price dollars, how much was
+history, how much was rebuilds after a gap, how much each habit above cost.
+Writes nothing, sends nothing. On a subscription the number is quota, not
+cash — but the proportions are the same.
+
+---
+
+## For engineers
 
 | start here | |
 |---|---|
@@ -91,14 +167,14 @@ global token counter.
 |---|---|---|
 | `context-guard.js` | UserPromptSubmit | reads the context of the last call from the transcript; above `CONTEXT_LIMIT` (200k) tells the model, every turn, to finish and ask for `/clear`. Records per-session peaks in `~/.claude/.context-peaks.json`. |
 | `batch-eviction.js` | Stop | above `EVICTION_LIMIT` (150k), once per session, holds the stop and makes the model write a handoff to `<cwd>/.claude/handoff-<session>.md`. |
-| `handoff-load.js` | SessionStart | after `/clear` or a new session, injects the newest handoff (< `HANDOFF_HOURS`, 12) and installs a **context canary**: a byte-stable first line (`**ctx · t<N> · ctx ok**`) that disappears when the instruction has fallen out of context. |
+| `handoff-load.js` | SessionStart | after `/clear` or a new session, injects the newest handoff (< `HANDOFF_HOURS`, 12) and installs a **context canary**: a byte-stable first line (`**Lastro · t<N> · ctx ok**`) that disappears when the instruction has fallen out of context. |
 | `read-recovery.js` | PostToolUse (Read) | when a `Read` had a `limit`, tells the model how many lines remain and the offset to continue from. |
 
 Install (references the checkout in place, so `git pull` updates them):
 
 ```bash
-git clone https://github.com/edubraqd/claude-context-forensics
-cd claude-context-forensics
+git clone https://github.com/edubraqd/lastro
+cd lastro
 python hooks/install.py --dry-run      # shows the resulting settings.json
 python hooks/install.py                # ~/.claude/settings.json (backup kept)
 python hooks/install.py --project .    # or a project's .claude/settings.json

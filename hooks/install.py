@@ -17,7 +17,7 @@ Environment knobs (put them under "env" in settings.json or export them):
   EVICTION_LIMIT=150000 batch-eviction threshold (tokens)
   HANDOFF_HOURS=12     max age of a handoff to re-inject
   CANARY=0             disable the context canary
-  CANARY_NAME=ctx      name shown in the canary line
+  CANARY_NAME=Lastro   name shown in the canary line
 """
 import argparse
 import json

@@ -9,7 +9,7 @@
 // a fixed line at the top of every reply whose only job is to disappear when
 // the old instruction falls out of context. context-guard.js measures tokens;
 // the canary measures adherence — different failures. Disable: CANARY=0.
-// Name shown in the line: CANARY_NAME (default "ctx"). Language: CONTEXT_LANG=pt.
+// Name shown in the line: CANARY_NAME (default "Lastro"). Language: CONTEXT_LANG=pt.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,7 +18,7 @@ const { readStdin } = require('./common');
 
 const HOURS = parseFloat(process.env.HANDOFF_HOURS) || 12;
 const CANARY = process.env.CANARY !== '0';
-const NAME = process.env.CANARY_NAME || 'ctx';
+const NAME = process.env.CANARY_NAME || 'Lastro';
 
 readStdin(data => {
   if (data.source && data.source !== 'clear' && data.source !== 'startup') return;

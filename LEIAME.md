@@ -1,11 +1,87 @@
-# claude-context-forensics
+# Lastro
 
-Para onde vão os tokens no Claude Code — medido em 674 sessões reais e um
-A/B controlado — mais as ferramentas para medir as suas, um livro-caixa frio
-do que cada alavanca vale de verdade, e quatro hooks que agem sobre o que foi
-encontrado.
+**O recibo por trás da fatura do Claude Code — e o freio que evita a parte
+mais cara dela.**
 
-*English: [README.md](README.md). Os relatórios e as páginas de apoio estão em inglês.*
+*English: [README.md](README.md).*
+
+## O que faz você gastar mais do que precisa
+
+Medido em 674 sessões reais de um usuário (não é estimativa):
+
+1. **Cada mensagem reenvia a conversa inteira.** Numa sessão longa, a chamada
+   média reenvia ~320 mil tokens. Ler esse histórico de novo é **62% da
+   conta**. O que você digita é uma fração; o que pesa é tudo que veio antes.
+2. **Parar mais de 1 hora e voltar custa uma reconstrução.** O cache dura
+   1 hora. Intervalo maior que isso obriga o Claude a reescrever a conversa
+   inteira em **93 a 97% das vezes**; intervalo menor que 20 minutos, só 1 a
+   7%. Essas reescritas são **80% de tudo que se gasta com escrita de cache**.
+   Trocar de modelo ou retomar uma sessão antiga (`--resume`) faz o mesmo.
+3. **Deixar a sessão crescer sem limpar.** O tamanho da sessão é o que mais
+   mexe na conta: a 200 mil tokens, cada resposta reenvia 200 mil tokens. E
+   instrução dada no começo pode cair fora do que o Claude ainda enxerga — o
+   Lastro mede isso, não adivinha (a linha do topo, abaixo).
+
+O que resolve é simples e ninguém faz na hora: **antes de sair, salvar um
+resumo do que foi feito e limpar a conversa (`/clear`)**. Ao voltar, o Claude
+lê o resumo em vez de reler tudo. O Lastro faz isso sozinho.
+
+## O que o Lastro faz na sua tela
+
+Quatro automações pequenas (hooks) que rodam dentro do Claude Code:
+
+| quando | o que você vê |
+|---|---|
+| a conversa passa de 150 mil tokens | o Claude escreve um resumo do trabalho em `.claude/handoff-<sessão>.md` antes de parar. Nada se perde. |
+| passa de 200 mil | em toda resposta o Claude avisa que está pesado e pede para você dar `/clear`. |
+| você dá `/clear` ou abre sessão nova | o resumo entra sozinho e o trabalho retoma de onde parou. |
+| toda resposta, depois disso | a primeira linha é `**Lastro · t3 · ctx ok**`: o número sobe a cada resposta e `ok / aging / thin` diz se o Claude ainda lembra das decisões. Se a linha **sumir**, ele já esqueceu — hora de `/clear`. |
+| o Claude lê um arquivo pela metade | recebe aviso de quantas linhas faltam, para não reler do zero. |
+
+Nenhuma delas manda dado para fora do seu computador.
+
+## Instalar (3 passos)
+
+Precisa de [Node.js](https://nodejs.org) e [Python 3.8+](https://www.python.org)
+instalados — os dois são "baixar, avançar, avançar".
+
+```bash
+git clone https://github.com/edubraqd/lastro
+```
+```bash
+cd lastro
+```
+```bash
+python hooks/install.py
+```
+
+Pronto. Feche e abra o Claude Code. Para mensagens em português e seu nome na
+linha do topo, ponha no `~/.claude/settings.json`:
+
+```json
+"env": { "CONTEXT_LANG": "pt", "CANARY_NAME": "SeuNome" }
+```
+
+Desinstalar: `python hooks/install.py --uninstall`. Ver o que seria alterado
+antes: `--dry-run`.
+
+## Quanto você gastou
+
+```bash
+python tools/ledger.py
+```
+
+Lê os registros que o Claude Code já guarda no seu computador
+(`~/.claude/projects`) e imprime, em dólar de tabela da API, quanto foi
+histórico, quanto foi reconstrução por intervalo, quanto cada hábito acima
+custou. Não escreve nada e não manda nada para fora. Em assinatura o número é
+cota, não dinheiro — mas a proporção é a mesma.
+
+---
+
+## Para quem é técnico
+
+Os relatórios e as páginas de apoio estão em inglês.
 
 | comece por aqui | |
 |---|---|
@@ -95,14 +171,14 @@ contador global de tokens.
 |---|---|---|
 | `context-guard.js` | UserPromptSubmit | lê o contexto da última chamada no transcript; acima de `CONTEXT_LIMIT` (200k) avisa o modelo, todo turno, para fechar e pedir `/clear`. Grava o pico por sessão em `~/.claude/.context-peaks.json`. |
 | `batch-eviction.js` | Stop | acima de `EVICTION_LIMIT` (150k), uma vez por sessão, segura o stop e faz o modelo escrever o handoff em `<cwd>/.claude/handoff-<sessão>.md`. |
-| `handoff-load.js` | SessionStart | depois de `/clear` ou sessão nova, injeta o handoff mais recente (< `HANDOFF_HOURS`, 12) e instala o **canário de contexto**: uma primeira linha byte-estável (`**ctx · t<N> · ctx ok**`) que some quando a instrução caiu do contexto. |
+| `handoff-load.js` | SessionStart | depois de `/clear` ou sessão nova, injeta o handoff mais recente (< `HANDOFF_HOURS`, 12) e instala o **canário de contexto**: uma primeira linha byte-estável (`**Lastro · t<N> · ctx ok**`) que some quando a instrução caiu do contexto. |
 | `read-recovery.js` | PostToolUse (Read) | quando um `Read` teve `limit`, diz ao modelo quantas linhas faltam e o offset para continuar. |
 
 Instalar (aponta para o checkout, então `git pull` atualiza):
 
 ```bash
-git clone https://github.com/edubraqd/claude-context-forensics
-cd claude-context-forensics
+git clone https://github.com/edubraqd/lastro
+cd lastro
 python hooks/install.py --dry-run      # mostra o settings.json resultante
 python hooks/install.py                # ~/.claude/settings.json (guarda backup)
 python hooks/install.py --project .    # ou o .claude/settings.json de um projeto

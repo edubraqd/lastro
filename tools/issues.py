@@ -62,7 +62,7 @@ def token():
 
 
 def get(url, tok):
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "claude-context-forensics"}
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "lastro"}
     if tok:
         headers["Authorization"] = "Bearer " + tok
     req = urllib.request.Request(url, headers=headers)

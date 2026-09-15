@@ -78,7 +78,7 @@ rules 3 and 6 mechanically; they do not change any code.
 ## A block you can paste into a project's CLAUDE.md
 
 ```markdown
-## Context cost (measured; see github.com/edubraqd/claude-context-forensics)
+## Context cost (measured; see github.com/edubraqd/lastro)
 - Pick model, effort and fast mode at session start; never switch mid-session.
 - Connect MCP / load skills before the long stretch.
 - Away > 1 h with a big context: write a handoff, then /clear. < 20 min: just come back.
