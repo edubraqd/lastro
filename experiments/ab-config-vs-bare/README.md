@@ -56,6 +56,14 @@ What it costs: 8 tasks × 2 arms × 3 reps on Opus 5 was 48 sessions and
   it decides to. What the test measures is the cost of *finding* what
   `config` receives injected — 3–4 calls versus 1.
 
+- **Windows: `claude` resolves to `claude.cmd`, which goes through `cmd.exe`.**
+  A prompt passed as an argument is parsed by cmd first, so `<`, `>`, `|`, `&`
+  in it become redirections and the prompt arrives truncated — measured
+  2026-09-15: the judge received the rubric only and nothing after `<<<`.
+  `judge.py` therefore sends its prompt on stdin. `run.py` still passes the
+  task prompt as an argument: keep those characters out of your `tasks.py`
+  prompts on Windows, or set `CLAUDE_BIN` to the real `cli.js` via node.
+
 ## What it does not measure
 
 Anything that acts *between* turns or *between* sessions: cache keep-alive,
@@ -69,7 +77,7 @@ does not (it amortises). See the report for the break-even arithmetic.
 |---|---|
 | `run.py` | runs the plan, writes `results.jsonl` |
 | `tasks.example.py` | template: prompt + fixture + oracle per task |
-| `judge.py` | blind Haiku verdicts → `judged.jsonl` |
+| `judge.py` | blind Haiku verdicts → `judged.jsonl`; `tasks.py` is looked up next to the results file first, then here |
 | `analyze.py` | per-arm / per-task / paired summary |
 | `decomp.py` | price fit + first-call-write vs. rest decomposition (needs the transcripts) |
 | `export.py` | strips answer text for sharing |

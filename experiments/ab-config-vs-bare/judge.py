@@ -16,7 +16,9 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "results.jsonl")
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.dirname(os.path.abspath(path)))  # tasks.py next to results.jsonl wins
 import tasks  # noqa: E402
 
 CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude") or "claude"
@@ -27,13 +29,14 @@ def judge(rubric, txt):
     p = (f"You are an evaluator. Criterion: {rubric}\n\nANSWER UNDER EVALUATION:\n<<<\n{txt}\n>>>\n\n"
          f"Reply with exactly one word: YES or NO.")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", CANARY="0", CANARIO="0", CLAUDE_CODE_DISABLE_AUTO_MEMORY="1")
-    r = subprocess.run([CLAUDE, "-p", p, "--model", "haiku", "--setting-sources", "", "--strict-mcp-config",
-                        "--max-turns", "1", "--tools", ""],
+    # prompt via stdin: on Windows `claude` resolves to claude.cmd and cmd.exe
+    # would treat the <<< >>> delimiters in an argv prompt as redirections
+    r = subprocess.run([CLAUDE, "-p", "--model", "haiku", "--setting-sources", "", "--strict-mcp-config",
+                        "--max-turns", "1", "--tools", ""], input=p,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=HERE, timeout=300)
     return r.stdout.strip().upper()
 
 
-path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "results.jsonl")
 out = path.replace("results", "judged")
 done = set()
 if os.path.exists(out):
