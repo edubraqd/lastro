@@ -7,6 +7,10 @@ __pycache__/
 # experiments: per-run output carries your project's content
 experiments/*/runs/
 experiments/*/results.jsonl
+experiments/*/results-*.jsonl
 experiments/*/judged.jsonl
 experiments/*/tasks.py
 experiments/*/fixture_*/
+
+# issue study copies: 41 MB of GitHub text, regenerate with tools/issues.py --fetch
+data/issues/*/md/

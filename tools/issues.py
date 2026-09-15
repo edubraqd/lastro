@@ -118,16 +118,79 @@ def row(r):
         r["created"], r["title"].replace("|", "/")[:90])
 
 
+def comments(number, tok):
+    out, page = [], 1
+    while True:
+        data, _ = get("https://api.github.com/repos/%s/issues/%d/comments?per_page=100&page=%d"
+                      % (REPO, number, page), tok)
+        out += data
+        if len(data) < 100:
+            return out
+        page += 1
+
+
+def fetch(rows, out, tok):
+    """One markdown file per issue: front matter, body, every comment. Study copy,
+    same shape as a book chapter, so it can be dropped into a knowledge base."""
+    md_dir = os.path.join(out, "md")
+    os.makedirs(md_dir, exist_ok=True)
+    index = ["# issues fetched %s" % date.today().isoformat(), "",
+             "| # | score | st | +1 | cmt | title |", "|--|--|--|--|--|--|"]
+    for i, r in enumerate(rows, 1):
+        path = os.path.join(md_dir, "%d.md" % r["number"])
+        if os.path.exists(path):
+            print("  %4d/%d #%d cached" % (i, len(rows), r["number"]), file=sys.stderr)
+        else:
+            it, rem = get("https://api.github.com/repos/%s/issues/%d" % (REPO, r["number"]), tok)
+            cs = comments(r["number"], tok) if it.get("comments") else []
+            print("  %4d/%d #%d %d comments (rl %s)" % (i, len(rows), r["number"], len(cs), rem),
+                  file=sys.stderr)
+            lines = ["---", "number: %d" % it["number"], "title: %s" % json.dumps(it["title"]),
+                     "state: %s" % it["state"], "state_reason: %s" % it.get("state_reason"),
+                     "created: %s" % it["created_at"], "updated: %s" % it["updated_at"],
+                     "closed: %s" % it.get("closed_at"),
+                     "labels: %s" % json.dumps([l["name"] for l in it.get("labels", [])]),
+                     "reactions: %d" % (it.get("reactions") or {}).get("total_count", 0),
+                     "comments: %d" % it.get("comments", 0), "url: %s" % it["html_url"],
+                     "score: %s" % r["score"], "themes: %s" % json.dumps(r["themes"]), "---", "",
+                     "# #%d %s" % (it["number"], it["title"]), "",
+                     "*%s, %s, +%d*" % (it["user"]["login"], it["created_at"][:10],
+                                        (it.get("reactions") or {}).get("total_count", 0)), "",
+                     it.get("body") or "", ""]
+            for c in cs:
+                lines += ["", "## comment %s %s" % (c["user"]["login"], c["created_at"][:16]), "",
+                          c.get("body") or ""]
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            time.sleep(0.3)
+        index.append("| [%d](md/%d.md) | %s | %s | %d | %d | %s |" % (
+            r["number"], r["number"], r["score"], r["state"][:1], r["reactions"], r["comments"],
+            r["title"].replace("|", "/")[:100]))
+    with open(os.path.join(out, "index.md"), "w", encoding="utf-8") as f:
+        f.write("\n".join(index) + "\n")
+    print("%d issues -> %s" % (len(rows), md_dir), file=sys.stderr)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=".")
     ap.add_argument("--pages", type=int, default=2)
     ap.add_argument("--top", type=int, default=60)
+    ap.add_argument("--from", dest="src", help="reuse an issues-<date>.json instead of searching")
+    ap.add_argument("--fetch", type=int, default=0,
+                    help="pull full body + comments for the top N into <out>/md/<number>.md")
     a = ap.parse_args()
     tok = token()
     if not tok:
         print("no token: 10 searches/min, may fail", file=sys.stderr)
     seen = {}
+    if a.src:
+        rows = json.load(open(a.src, encoding="utf-8"))
+        d = date.today().isoformat()
+        os.makedirs(a.out, exist_ok=True)
+        if a.fetch:
+            fetch(rows[:a.fetch], a.out, tok)
+        return
     for q, theme in QUERIES:
         for it in search(q, theme, a.pages, tok):
             n = it["number"]
@@ -145,7 +208,7 @@ def main():
             "reactions": (it.get("reactions") or {}).get("total_count", 0),
             "labels": [l["name"] for l in it.get("labels", [])],
             "themes": sorted(it["_themes"]), "url": it["html_url"],
-            "score": score(it), "body": (it.get("body") or "")[:1500],
+            "score": score(it), "body": it.get("body") or "",
         })
     rows.sort(key=lambda r: -r["score"])
     d = date.today().isoformat()
@@ -166,6 +229,8 @@ def main():
     with open(os.path.join(a.out, "issues-%s.md" % d), "w", encoding="utf-8") as f:
         f.write("\n".join(md) + "\n")
     print("%d issues -> %s/issues-%s.{json,md}" % (len(rows), a.out, d), file=sys.stderr)
+    if a.fetch:
+        fetch(rows[:a.fetch], a.out, tok)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ Arms (each run is a fresh session in the project directory):
   bare    --setting-sources ""  + CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
           (probed 2026-09-14: without the env var the auto-memory still loads)
   config  --setting-sources user,project,local  (everything as you have it)
+  nore    config + CLAUDE_CODE_TOTAL_TOKENS_REMINDER=off  (no <total_tokens> block;
+          the env var outranks settings.json, probed in the 2.1.272 binary)
+
+--arms a,b picks the pair (default bare,config); --out picks the results file.
 
 Both arms: --strict-mcp-config (no MCP in either), --dangerously-skip-permissions,
 --max-turns 40, CANARY=0 (a context canary only makes sense across sessions).
@@ -43,6 +47,8 @@ lock = threading.Lock()
 ARMS = {
     "bare": dict(flags=["--setting-sources", ""], env={"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}),
     "config": dict(flags=["--setting-sources", "user,project,local"], env={}),
+    "nore": dict(flags=["--setting-sources", "user,project,local"],
+                 env={"CLAUDE_CODE_TOTAL_TOKENS_REMINDER": "off"}),
 }
 
 
@@ -90,7 +96,7 @@ def usage_jsonl(path):
     return tot
 
 
-def one(task, arm, rep, project, dry=False):
+def one(task, arm, rep, project, dry=False, out=OUT):
     tag = f"{task}_{arm}_r{rep}"
     rundir = os.path.join(RUNS, tag)
     fx = tasks.TASKS[task].get("fixture")
@@ -130,7 +136,7 @@ def one(task, arm, rep, project, dry=False):
                ok=tasks.grade(task, txt, rundir), result=txt,
                err=d.get("_stderr") or d.get("_timeout") or d.get("is_error"))
     with lock:
-        with open(OUT, "a", encoding="utf-8") as f:
+        with open(out, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         print(f"{tag:26s} ok={rec['ok']} calls={u.get('calls')} cr={u.get('cr')} cw={u.get('cw')} "
               f"out={u.get('output')} wall={rec['wall']} err={rec['err']}", flush=True)
@@ -146,10 +152,15 @@ def main():
     workers = int(a[a.index("--workers") + 1]) if "--workers" in a else 3
     only = a[a.index("--only") + 1].split(",") if "--only" in a else None
     dry = "--dry" in a
+    arms = a[a.index("--arms") + 1].split(",") if "--arms" in a else ["bare", "config"]
+    out = os.path.abspath(a[a.index("--out") + 1]) if "--out" in a else OUT
+    for arm in arms:
+        if arm not in ARMS:
+            sys.exit(f"unknown arm {arm!r}; have {list(ARMS)}")
     os.makedirs(RUNS, exist_ok=True)
     done = set()
-    if os.path.exists(OUT) and not dry:
-        for line in open(OUT, encoding="utf-8"):
+    if os.path.exists(out) and not dry:
+        for line in open(out, encoding="utf-8"):
             e = json.loads(line)
             if e.get("sid") and not e.get("err"):
                 done.add((e["task"], e["arm"], e["rep"]))
@@ -161,17 +172,16 @@ def main():
     plan = []
     for t in order:
         for rep in range(1, reps + 1):
-            arms = ["bare", "config"] if rep % 2 else ["config", "bare"]  # ABBA
-            for arm in arms:
+            for arm in (arms if rep % 2 else arms[::-1]):  # ABBA
                 if (t, arm, rep) not in done:
                     plan.append((t, arm, rep))
     for t in {p[0] for p in plan}:
         fx = tasks.TASKS[t].get("fixture")
         if fx and not os.path.isdir(os.path.join(HERE, fx)):
             sys.exit(f"{t}: fixture directory {fx!r} not found next to run.py")
-    print(f"{len(plan)} runs, {workers} workers, already done {len(done)}", flush=True)
+    print(f"{len(plan)} runs, {workers} workers, already done {len(done)}, arms {arms}, out {out}", flush=True)
     with ThreadPoolExecutor(workers) as ex:
-        list(ex.map(lambda p: one(*p, project=project, dry=dry), plan))
+        list(ex.map(lambda p: one(*p, project=project, dry=dry, out=out), plan))
 
 
 if __name__ == "__main__":
