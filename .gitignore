@@ -3,3 +3,10 @@ __pycache__/
 .claude/
 *.log
 *.bak
+
+# experiments: per-run output carries your project's content
+experiments/*/runs/
+experiments/*/results.jsonl
+experiments/*/judged.jsonl
+experiments/*/tasks.py
+experiments/*/fixture_*/

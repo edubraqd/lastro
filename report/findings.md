@@ -92,9 +92,29 @@ max_tokens: 1` every 20 min. One `claude -p` session, Opus 5, 1h cache,
 48,055 = 13,602 + 34,453. Eight pings, 8 output tokens, zero cache writes,
 OAuth headers still valid at 2h20. **A cache hit refreshes the 1h TTL.** Each
 ping costs 0.1× of the current context; against a TTL re-write at 2× the
-break-even is ~20 pings, i.e. ~7 hours of idle per event — it pays whenever
-you come back the same day. Posted as a
+break-even is ~20 pings, i.e. ~7 hours of idle per event. Posted as a
 [comment on #94177](https://github.com/anthropics/claude-code/issues/94177#issuecomment-5662890763).
+
+**Aggregated over real behaviour it is a wash (added 2026-09-15).** The
+per-event arithmetic above assumes you come back. `tools/ledger.py` replays a
+blind pinger over every idle gap in the 674 sessions — it pays a ping every
+20 min on every gap, break or not, up to 9 per gap — and credits it only the
+TTL re-writes it would have reached:
+
+| pinger | TTL breaks reached | pings paid | net |
+|---|---|---|---|
+| blind, 9 pings max (3 h) | 324 of 760 | on every gap > 20 min | **−US$338 (−0.8%)** |
+| blind, 6 pings max | 262 | | −US$220 (−0.5%) |
+| blind, 3 pings max | 91 | | −US$382 (−0.9%) |
+| pings only on sessions you knew you'd return to within 3 h | 324 | only those | +US$880 (+2.2%) |
+
+Of the 760 TTL re-writes, 436 came after a gap over 200 min (267 over 8 h —
+overnight); the pinger had already given up, and its pings on those gaps were
+pure cost. The gross ceiling — every TTL re-write avoided for free — is
+US$3,076 (7.6%); the honest number for a pinger that does not know when you
+come back is zero or slightly negative. What does capture the 7.6% without a
+pinger: a handoff file and `/clear` before leaving, which costs a ~30k prefix
+write on return instead of a ~400k history re-write.
 Two pitfalls if you rebuild it: the Haiku side-call (title / classifier)
 arrives ~1 s after the main call and must not be the body that gets replayed;
 on Windows `SO_REUSEADDR` lets two listeners bind the same port.
@@ -307,7 +327,65 @@ what is in the prompt; use the jsonl (`tools/sessions.py`) to count.
 `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` keeps the 1M window through a
 loopback proxy; whether it also restores tool deferral was not tested.
 
-## 9. Reading list that shaped the hooks
+## 9. The `CLAUDE.md` block is never shared across sessions
+
+The docs say sessions in the same directory "build matching prefixes and read
+each other's cache", and the caching blog lists `CLAUDE.md` as "cached within
+a project". Measured on the first call of every session (`tools/first_call.py`,
+703 sessions, 2026-09-14): a warm start (< 60 min after another session in
+the same directory) reads **46,328** tokens from cache in every project —
+the tool schemas plus `system[0..2]` — plus a fixed 3.4–6.2k per project
+(`system[3]`, which carries the memory path). **Zero of 474 warm starts read
+the `CLAUDE.md` block** from another session's cache.
+
+Why (request bodies captured through the proxy, CLI 2.1.270): the order on
+the wire is `tools → system[0..3]` (cache breakpoints on 2 and 3) → `msg0 =
+user [CLAUDE.md + MEMORY reminder | userEmail | attribution | PROMPT]` →
+`msg1 = system (cache_control)` with hooks, environment (scratchpad uuid),
+deferred tools, agents, MCP, skills. No breakpoint sits at the end of the
+`CLAUDE.md` block; the next one is in `msg1`, *after* the user prompt. Two
+sessions diverge at the prompt, so nothing after `system[3]` can match. The
+scratchpad uuid in the environment block is irrelevant — the prompt already
+differs before it. Filed as
+[#94417](https://github.com/anthropics/claude-code/issues/94417).
+
+Weight: 4–7k tokens (`CLAUDE.md`) to 21k (a full project prefix with memory
+and hook text, [ab-config-vs-bare](ab-config-vs-bare.md)) per new session at
+2× write price — US$0.05–0.21 per session. Under 0.2% of a long session; the
+only regime where it matters is many one-question sessions.
+
+## 10. TTL buckets: the main conversation is always 1h, subagents always 5m
+
+The docs (`code.claude.com/docs/en/prompt-caching`, read 2026-09-14) describe
+two buckets per request: main conversation 1h on a subscription within quota
+(5m in overage), subagents / workflows / compaction / titles 5m; knobs
+`promptCacheTtl`, `subagentPromptCacheTtl` (≥ 2.1.242), `FORCE_PROMPT_CACHING_5M`.
+The transcript records `usage.cache_creation.ephemeral_5m_input_tokens` and
+`_1h_`, so this is checkable (`tools/ledger.py`, "cache writes by TTL bucket"):
+
+| thread | 1h writes | 5m writes |
+|---|---|---|
+| main conversation | 1,196.6 M | 0.02 M (one session in July) |
+| subagents (`isSidechain`) | 0 | 92.5 M |
+
+Consequences: this account was never in overage, so `promptCacheTtl` would
+change nothing — do not set it. Gaps ≥ 5 min in subagents break 81–100%, but
+there are only ~390 such gaps; forcing 1h there would raise 372M tokens of
+5m writes (1.25×) to 1h writes (2×) for a saving smaller than the surcharge —
+do not set `subagentPromptCacheTtl: 1h` either. And the break-rate curve of
+section 3 (8% at 5–20 min rising to 24% at 40–60) is measured on 1h writes
+only; it is not a 5m bucket in disguise. The literature explanation is
+server-side eviction ahead of TTL under load (Continuum, arXiv 2511.02230 §1;
+SAECache, arXiv 2605.18825 §2.2): a 1h TTL is a ceiling, not a guarantee.
+
+Also from the same doc, matching the logs: changing effort mid-session
+invalidates on Opus 5 (only Fable 5.1 ≥ 2.1.260 preserves it); fast mode
+puts a header in the cache key, so the first fast request re-reads everything
+— switch it on at the start, never mid-session; `/rewind` returns to a cached
+prefix and writes nothing; a warm `/compact` reads the prefix and only
+generates the summary, a cold one (> TTL) reprocesses everything.
+
+## 11. Reading list that shaped the hooks
 
 - **TokenPilot** (arXiv 2606.17016). Cost K = α·hit + miss; text compressors
   (LLMLingua-2, SelectiveContext) cost *more* than vanilla in continuous mode
