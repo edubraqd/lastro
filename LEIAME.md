@@ -112,6 +112,12 @@ Os relatórios e as páginas de apoio estão em inglês.
   100% contra 92%, fez 40% menos chamadas e custou US$0,10 a mais por sessão
   de uma tarefa** — o prefixo de 21k que ela escreve a cada sessão nova, e que
   nunca é servido do cache de outra sessão. Equilíbrio em ~3 tarefas por sessão.
+- **Instalado de uma vez, o pacote cortou a conta real em 45% por chamada e
+  58% por dia** nos cinco dias depois de 14/09 contra os catorze antes
+  (contexto por chamada 262k → 134k, chamadas acima de 200k 64% → 13%,
+  autocompact 17 → 0). Degrau no dia da instalação com chamadas/dia estáveis;
+  quase tudo é o cap + handoff, não settings.
+  [report/usage-real-2026-09-17.md](report/usage-real-2026-09-17.md) (inglês).
 - **O `.jsonl` da sessão infla o uso 1,7×** se você não deduplicar por
   `(message.id, requestId)` — uma linha por bloco de conteúdo, mesmo `usage`
   em todas.
@@ -134,6 +140,7 @@ Python 3.8+, só stdlib. Lê `~/.claude/projects/*/*.jsonl` (ou
 
 ```bash
 python tools/ledger.py                   # a tabela do SAVINGS.md nos seus transcripts
+python tools/before_after.py --split 2026-09-14 --daily   # uma mudança no dia X mexeu na conta? (report/usage-real-2026-09-17.md)
 python tools/sessions.py                 # uso por sessão, dedup, divisão do custo
 python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # quebras de cache classificadas: ttl / prune / resume / ...

@@ -61,6 +61,7 @@ python tools/ledger.py            # their ledger: which lever touches what, on t
 python tools/sessions.py          # per-session usage, deduplicated
 python tools/ttl.py --last 0      # their break rate by idle gap
 python tools/rewrites.py --last 0 # what changed before each full re-write
+python tools/before_after.py --split YYYY-MM-DD --daily   # after a change: did it move the bill? look for a step, not a drift
 ```
 
 Stdlib only, read-only on `~/.claude/projects`. Run them before proposing

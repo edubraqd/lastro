@@ -74,6 +74,32 @@ on, long sessions). Your shares will differ; the mechanisms will not.
   saving.
 - **Correlation**: the hook line. Controls hold; mechanism not found.
 
+## What was actually saved, on one machine
+
+The table above is ceilings and counterfactuals. Four working days after the
+whole package went in (hooks with the 150k/200k cap, handoff + `/clear`,
+`skillOverrides`, terse output), the same transcripts say:
+
+| | before (31/08–13/09, 14 days) | after (14/09–18/09, 5 days) | delta |
+|---|---|---|---|
+| US$/day | 446 | 188 | **−58%** |
+| US$/call | 0.225 | 0.123 | **−45%** |
+| context per call, median / p90 | 262k / 595k | 134k / 210k | −49% / −65% |
+| calls above 200k | 64% | 13% | |
+| calls/day | 1,986 | 1,531 | −23% (17/09 partial; 1.6–2.2k on full days) |
+| TTL re-write US$/day | 39 | 9 | |
+| autocompact events | 17 | 0 | |
+
+A step on 14/09, not a drift; sessions/day doubled and calls/session halved,
+which is the cap doing what it says. The ledger's "33% ceiling" line came out
+larger because TTL re-writes and compactions shrink with the context.
+`skillOverrides` and terse output are visible (−1k prefix, −24% output) and
+still noise on the total. The tool-output compression proxy contributed
+nothing: it ran on 0 sessions. Method, per-day table and what it does not
+show (quality of work split across sessions) in
+[report/usage-real-2026-09-17.md](report/usage-real-2026-09-17.md);
+`python tools/before_after.py --split <day>` on your own logs.
+
 ## How to get your own numbers
 
 ```bash

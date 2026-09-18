@@ -109,6 +109,11 @@ cash — but the proportions are the same.
   vs 92% accurate, made 40% fewer calls, and cost US$0.10 more per
   one-task session** — the 21k prefix it writes on every new session, which
   is never served from another session's cache. Break-even ~3 tasks/session.
+- **Installed all at once, the package cut the real bill 45% per call and
+  58% per day** on the five days after 14/09 vs the fourteen before (context
+  per call 262k → 134k, calls above 200k 64% → 13%, autocompact 17 → 0). A
+  step on the install day with calls/day flat; nearly all of it is the cap
+  + handoff, not settings. [report/usage-real-2026-09-17.md](report/usage-real-2026-09-17.md).
 - **The session `.jsonl` overstates usage 1.7×** unless you dedup by
   `(message.id, requestId)` — one line per content block, same `usage` on each.
 - `skillOverrides` saves 4.5% of the prefix (~2.7k tokens/call); plugin skills
@@ -130,6 +135,7 @@ Python 3.8+, stdlib only. Reads `~/.claude/projects/*/*.jsonl` (or
 
 ```bash
 python tools/ledger.py                   # the SAVINGS table on your transcripts
+python tools/before_after.py --split 2026-09-14 --daily   # did a change on day X move the bill? (report/usage-real-2026-09-17.md)
 python tools/sessions.py                 # per-session usage, dedup, cost split
 python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # cache breaks classified: ttl / prune / resume / ...

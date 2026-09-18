@@ -23,6 +23,8 @@ sys.path.insert(0, TOOLS)
 
 import fixture  # noqa: E402
 
+S1_FIRST_CW_MEDIAN = int((fixture.S1_CALLS[0][3] + fixture.S2_EXTRA[3]) / 2)
+
 
 def run_tool(name, *args, cfg, env=None):
     e = {**os.environ, "CLAUDE_CONFIG_DIR": cfg, "PYTHONIOENCODING": "utf-8", **(env or {})}
@@ -150,6 +152,22 @@ class ToolsTest(unittest.TestCase):
         d = json.loads(r.stdout)
         self.assertEqual(d["sessions"], 2)
         self.assertEqual(d["tokens"]["cw"], fixture.S1_CACHE_CREATION + fixture.S2_EXTRA[3])
+
+    # --- before_after.py ---------------------------------------------------
+
+    def test_before_after_splits_by_first_call_day(self):
+        r = run_tool("before_after.py", "--split", "2026-09-15", "--min-calls", "1", "--json", cfg=self.cfg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["before"]["sessions"], 2)
+        self.assertEqual(d["before"]["calls"], len(fixture.S1_CALLS) + 1)
+        self.assertEqual(d["before"]["ttl_events"], 1)          # the 88 min gap in s1
+        self.assertEqual(d["after"]["calls"], 0)
+        r = run_tool("before_after.py", "--split", "2026-09-14", "--min-calls", "1", "--json", cfg=self.cfg)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["before"]["calls"], 0)
+        self.assertEqual(d["after"]["sessions"], 2)
+        self.assertEqual(d["after"]["first_cw_median"], S1_FIRST_CW_MEDIAN)
 
     # --- first_call.py -----------------------------------------------------
 
