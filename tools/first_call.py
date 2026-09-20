@@ -5,15 +5,18 @@ For each main-conversation JSONL under ~/.claude/projects (or
 CLAUDE_CONFIG_DIR), takes the first assistant message with usage and measures
 the gap to the last call of any other session in the same directory. A warm
 start (< 60 min) that reads only the system-prompt layer means the CLAUDE.md
-block was not shared (anthropics/claude-code#94417).
+block was not shared (anthropics/claude-code#93499; our #94417 was closed as
+a duplicate of it).
 
     python tools/first_call.py
 """
+import bisect
 import glob
 import json
 import os
 import statistics
 import sys
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import PROJECTS, ts  # noqa: E402
@@ -59,9 +62,17 @@ def main():
         if first:
             rows.append(first)
     calls.sort(key=lambda x: x[1])
+    # one sorted list per project: scanning all ~330k calls per row cost ~15 s of a 31 s run
+    by_proj = defaultdict(list)
+    for c in calls:
+        by_proj[c[0]].append(c)
+    times = {p: [c[1] for c in cs] for p, cs in by_proj.items()}
     for r in rows:
-        prev = [c for c in calls if c[0] == r["proj"] and c[2] != r["sid"] and c[1] < r["t"]]
-        r["gap_min"] = round((r["t"] - prev[-1][1]).total_seconds() / 60) if prev else None
+        cs = by_proj[r["proj"]]
+        i = bisect.bisect_left(times[r["proj"]], r["t"]) - 1   # last call strictly before this one
+        while i >= 0 and cs[i][2] == r["sid"]:   # a resumed session can carry its own earlier calls in another file
+            i -= 1
+        r["gap_min"] = round((r["t"] - cs[i][1]).total_seconds() / 60) if i >= 0 else None
     rows.sort(key=lambda r: r["t"])
     print(f"{'date':16} {'project':28} {'ver':9} {'entry':8} {'gap':>6} {'cr':>7} {'cc':>7} {'msg1~tok':>8}")
     for r in rows[-45:]:

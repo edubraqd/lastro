@@ -24,7 +24,11 @@ Medido em 674 sessões reais de um usuário (não é estimativa):
 
 O que resolve é simples e ninguém faz na hora: **antes de sair, salvar um
 resumo do que foi feito e limpar a conversa (`/clear`)**. Ao voltar, o Claude
-lê o resumo em vez de reler tudo. O Lastro faz isso sozinho.
+lê o resumo em vez de reler tudo. Acima de 150 mil tokens o Lastro faz isso
+sozinho; abaixo disso, antes de sair, peça ao Claude para escrever o handoff
+em `.claude/handoff-<sessão>.md` (a cláusula TRIP da linha do canário traz o
+caminho exato; com `CANARY=0` essa linha não existe, então nomeie o arquivo
+você mesmo: `handoff-` + os 8 primeiros hex do id da sessão) e dê `/clear`.
 
 ## O que o Lastro faz na sua tela
 
@@ -32,9 +36,9 @@ Quatro automações pequenas (hooks) que rodam dentro do Claude Code:
 
 | quando | o que você vê |
 |---|---|
-| a conversa passa de 150 mil tokens | o Claude escreve um resumo do trabalho em `.claude/handoff-<sessão>.md` antes de parar. Nada se perde. |
+| a conversa passa de 150 mil tokens | o Claude escreve um resumo do trabalho em `.claude/handoff-<sessão>.md` antes de parar. O essencial fica (umas 60 linhas); o transcript completo continua em `~/.claude/projects` e a sessão nova recebe o caminho dele quando o resumo é carregado. |
 | passa de 200 mil | em toda resposta o Claude avisa que está pesado e pede para você dar `/clear`. |
-| você dá `/clear` ou abre sessão nova | o resumo entra sozinho e o trabalho retoma de onde parou. |
+| você dá `/clear` ou abre sessão nova | o resumo mais novo que ainda dá para carregar — escrito por uma sessão desta máquina, com menos de 72 h (`HANDOFF_HOURS`), nunca carregado antes — entra sozinho e o trabalho retoma de onde parou. Handoff que chegou por `git clone` ou cópia é pulado, e não esconde um mais velho que seja seu. Se existe um resumo que não pôde ser carregado, o Claude é avisado disso e do motivo, e não o lê sem você pedir. |
 | toda resposta, depois disso | a primeira linha é `**Lastro · t3 · ctx ok**`: o número sobe a cada resposta e `ok / aging / thin` diz se o Claude ainda lembra das decisões. Se a linha **sumir**, ele já esqueceu — hora de `/clear`. |
 | o Claude lê um arquivo pela metade | recebe aviso de quantas linhas faltam, para não reler do zero. |
 
@@ -62,8 +66,11 @@ linha do topo, ponha no `~/.claude/settings.json`:
 "env": { "CONTEXT_LANG": "pt", "CANARY_NAME": "SeuNome" }
 ```
 
-Desinstalar: `python hooks/install.py --uninstall`. Ver o que seria alterado
-antes: `--dry-run`.
+Desinstalar: `python hooks/install.py --uninstall` (com `--project .` se instalou
+num projeto). Ficam para trás `~/.claude/.context-peaks.json`, os
+`.claude/handoff-*.md` de cada projeto e o `settings.json.bak` (o seu settings
+de antes da primeira instalação); apague à mão para zerar. Ver o que seria
+alterado antes: `--dry-run`.
 
 ## Quanto você gastou
 
@@ -146,7 +153,7 @@ python tools/sessions.py --last 0 --min-calls 5
 python tools/breaks.py                   # quebras de cache classificadas: ttl / prune / resume / ...
 python tools/ttl.py --last 0             # taxa de quebra por intervalo ocioso
 python tools/rewrites.py --last 0        # re-escritas sem gap: o que mudou antes do histórico
-python tools/first_call.py               # 1ª chamada de cada sessão: o que um início quente lê de outras sessões (#94417)
+python tools/first_call.py               # 1ª chamada de cada sessão: o que um início quente lê de outras sessões (anthropics/claude-code#93499; o nosso #94417 foi fechado como duplicata dele)
 python tools/diverge.py                  # log do proxy: em cada quebra, o primeiro byte que difere da chamada anterior
 python tools/issues.py --top 40          # GitHub: issues do claude-code sobre cache/contexto/custo, por reações (precisa de GITHUB_TOKEN ou gh)
 ```
@@ -176,9 +183,9 @@ contador global de tokens.
 
 | hook | evento | faz |
 |---|---|---|
-| `context-guard.js` | UserPromptSubmit | lê o contexto da última chamada no transcript; acima de `CONTEXT_LIMIT` (200k) avisa o modelo, todo turno, para fechar e pedir `/clear`. Grava o pico por sessão em `~/.claude/.context-peaks.json`. |
+| `context-guard.js` | UserPromptSubmit | lê o contexto da última chamada no transcript; acima de `CONTEXT_LIMIT` (200k) avisa o modelo, todo turno, para fechar e pedir `/clear`. Logo depois de `/compact` o tamanho é desconhecido até a chamada seguinte (a contagem de tokens do resumo não é o contexto), então ele fica calado nesse prompt. Grava o pico por sessão em `~/.claude/.context-peaks.json`; um arquivo de picos que não consegue ler ou gravar fica intocado (o aviso sai do mesmo jeito; a falha vira uma linha no stderr). |
 | `batch-eviction.js` | Stop | acima de `EVICTION_LIMIT` (150k), uma vez por sessão, segura o stop e faz o modelo escrever o handoff em `<cwd>/.claude/handoff-<sessão>.md`. |
-| `handoff-load.js` | SessionStart | depois de `/clear` ou sessão nova, injeta o handoff mais recente (< `HANDOFF_HOURS`, 12) e instala o **canário de contexto**: uma primeira linha byte-estável (`**Lastro · t<N> · ctx ok**`) que some quando a instrução caiu do contexto. |
+| `handoff-load.js` | SessionStart (`startup\|clear`) | depois de `/clear` ou sessão nova, percorre os handoffs do mais novo ao mais velho e injeta o primeiro que consegue carregar (< `HANDOFF_HOURS`, 72; escrito por sessão que rodou nesta máquina; nunca carregado antes). Arquivo estrangeiro ou já carregado não esconde um mais velho que seja seu; arquivo que existe mas não foi carregado é nomeado ao modelo, com o motivo. A carga é registrada (pelo mtime do arquivo, no `.context-peaks.json`) antes de o texto entrar: se a marca não grava, nada é injetado e o próximo `/clear` tenta de novo. O texto entra como arquivo `<handoff>` (os primeiros 12000 chars; uma nota depois do bloco dá o caminho do resto) que o modelo deve conferir contra a árvore de trabalho. Depois instala o **canário de contexto**: uma primeira linha byte-estável (`**Lastro · t<N> · ctx ok**`) que some quando a instrução caiu do contexto; o canário nunca depende do handoff. |
 | `read-recovery.js` | PostToolUse (Read) | quando um `Read` teve `limit`, diz ao modelo quantas linhas faltam e o offset para continuar. |
 
 Instalar (aponta para o checkout, então `git pull` atualiza):
@@ -187,14 +194,15 @@ Instalar (aponta para o checkout, então `git pull` atualiza):
 git clone https://github.com/edubraqd/lastro
 cd lastro
 python hooks/install.py --dry-run      # mostra o settings.json resultante
-python hooks/install.py                # ~/.claude/settings.json (guarda backup)
+python hooks/install.py                # ~/.claude/settings.json (settings.json.bak = o arquivo de antes do Lastro; reinstalar não o sobrescreve)
 python hooks/install.py --project .    # ou o .claude/settings.json de um projeto
-python hooks/install.py --uninstall
+python hooks/install.py --uninstall [--project .]
 ```
 
 Ajustes, por variável de ambiente ou em `"env"` no settings.json:
 `CONTEXT_LANG=pt` (mensagens em português), `CONTEXT_LIMIT`,
-`EVICTION_LIMIT`, `HANDOFF_HOURS`, `CANARY=0`, `CANARY_NAME`.
+`EVICTION_LIMIT`, `HANDOFF_HOURS`, `CANARY=0` (também tira o único lugar em
+que o modelo recebe o caminho do handoff abaixo de 150 mil), `CANARY_NAME`.
 
 Por que handoff em arquivo e não `/compact`: histórico podado com resumo curto
 do que foi feito venceu tanto o histórico inteiro quanto o resumo do histórico

@@ -9,6 +9,11 @@ Builds a fake CLAUDE_CONFIG_DIR with one project and two transcripts:
   s2.jsonl  a resume copy of s1 (every line duplicated) plus one new call.
             Processed after s1, it must contribute only that one call.
 
+build_side() writes a separate tree with one transcript, s3.jsonl: three
+main calls, a burst of three `isSidechain` (subagent) calls, then the main
+thread resuming from its own cache. It lives apart so the s1/s2 numbers
+never move.
+
 Every number below is referenced by tests/test_tools.py; change both.
 """
 import json
@@ -34,8 +39,25 @@ COMPACT_TS = "2026-09-14T11:32:00.000Z"
 
 S1_CACHE_CREATION = sum(c[3] for c in S1_CALLS)   # 262000
 
+# subagent calls interleaved with the main thread: pairwise tools must skip
+# them, per-session totals must keep them (they are billed)
+SIDE_MAIN = [
+    ("2026-09-14T10:00:00.000Z", MODEL, 5, 100000, 0, 50),
+    ("2026-09-14T10:01:00.000Z", MODEL, 5, 1000, 100000, 50),
+    ("2026-09-14T10:02:00.000Z", MODEL, 5, 1000, 101000, 50),
+]
+SIDE_SUB = [
+    ("2026-09-14T10:02:10.000Z", "claude-sonnet-5", 5, 50000, 0, 50),   # cold start of another prefix
+    ("2026-09-14T10:02:20.000Z", "claude-sonnet-5", 5, 500, 50000, 50),
+    ("2026-09-14T10:02:30.000Z", "claude-sonnet-5", 5, 500, 50500, 50),
+]
+SIDE_BACK = ("2026-09-14T10:03:00.000Z", MODEL, 5, 2000, 102000, 50)    # main resumes from its cache
+SIDE_SUB_CW = sum(c[3] for c in SIDE_SUB)                              # 51000, all 5m writes
+SIDE_CW = sum(c[3] for c in SIDE_MAIN) + SIDE_SUB_CW + SIDE_BACK[3]    # 155000
 
-def _lines(calls, sid, start=0):
+
+def _lines(calls, sid, start=0, side=None):
+    """side=None keeps the s1/s2 lines byte-identical; a bool adds isSidechain and the TTL buckets."""
     out = []
     for i, (t, model, inp, cw, cr, outp) in enumerate(calls, start):
         msg = {"id": "msg_%d" % i, "model": model, "role": "assistant",
@@ -43,6 +65,10 @@ def _lines(calls, sid, start=0):
                          "cache_read_input_tokens": cr, "output_tokens": outp}}
         base = {"type": "assistant", "requestId": "req_%d" % i, "timestamp": t,
                 "version": VERSION, "entrypoint": "cli", "sessionId": sid}
+        if side is not None:
+            base["isSidechain"] = side
+            msg["usage"]["cache_creation"] = {"ephemeral_5m_input_tokens": cw if side else 0,
+                                              "ephemeral_1h_input_tokens": 0 if side else cw}
         out.append({**base, "message": {**msg, "content": [{"type": "text", "text": "x"}]}})
         out.append({**base, "message": {**msg, "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}})
     return out
@@ -66,7 +92,22 @@ def build(root):
         with open(p, "w", encoding="utf-8") as fh:
             for l in lines:
                 fh.write(json.dumps(l, ensure_ascii=False) + "\n")
-    # transcripts() orders by mtime: the original must come first
+    # transcripts() orders by mtime, then size on a tie: the original must come first
     os.utime(p1, (1700000000, 1700000000))
     os.utime(p2, (1700000100, 1700000100))
     return cfg, p1, p2
+
+
+def build_side(root):
+    """Write the sidechain tree under root. Returns (cfg_dir, s3_path)."""
+    cfg = os.path.join(root, "claude")
+    proj = os.path.join(cfg, "projects", "D--proj-b")
+    os.makedirs(proj)
+    lines = (_lines(SIDE_MAIN, "s3", side=False)
+             + _lines(SIDE_SUB, "s3", start=len(SIDE_MAIN), side=True)
+             + _lines([SIDE_BACK], "s3", start=len(SIDE_MAIN) + len(SIDE_SUB), side=False))
+    p3 = os.path.join(proj, "s3.jsonl")
+    with open(p3, "w", encoding="utf-8") as fh:
+        for l in lines:
+            fh.write(json.dumps(l, ensure_ascii=False) + "\n")
+    return cfg, p3

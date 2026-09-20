@@ -29,10 +29,10 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import transcripts  # noqa: E402
-from _common import ts  # noqa: E402
+from _common import PROJECTS, ts  # noqa: E402
 
 SKIP = {"assistant", "user", "queue-operation", "last-prompt"}
-# events that change the request prefix by construction (see rewrites.py)
+# events that change the request prefix by construction (tools, system prompt, params); shared with rewrites.py
 PREFIX_EVENTS = {
     "attachment:deferred_tools_delta", "attachment:mcp_instructions_delta", "attachment:skill_listing",
     "attachment:ultra_effort_enter", "system:model_refusal_fallback", "system:api_error",
@@ -40,6 +40,12 @@ PREFIX_EVENTS = {
     "attachment:goal_status", "attachment:remote_session_change", "attachment:auto_mode",
     "permission-mode", "attachment:date_change",
 }
+
+
+def prices(per_m_input):
+    """US$ per token: input P, cache read 0.1 P, 1h write 2 P, 5m write 1.25 P, output 5 P."""
+    P = per_m_input / 1e6
+    return {"input": P, "cr": 0.1 * P, "cw1h": 2.0 * P, "cw5m": 1.25 * P, "out": 5.0 * P}
 
 
 def load(path, seen):
@@ -97,8 +103,7 @@ def main():
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    P = args.price_input / 1e6
-    price = {"input": P, "cr": 0.1 * P, "cw1h": 2.0 * P, "cw5m": 1.25 * P, "out": 5.0 * P}
+    price = prices(args.price_input)
 
     seen = set()
     tot = Counter()
@@ -224,6 +229,8 @@ def main():
                                    for (a, b) in hook_turns}}, indent=1))
         return
 
+    if not ctx_main:
+        sys.exit("no transcripts with >= %d calls under %s" % (args.min_calls, PROJECTS))
     print(f"sessions {n_sessions:,}  main-thread calls {n_main_calls:,}  (min {args.min_calls} calls/session)")
     print(f"context per main-thread call: mean {statistics.mean(ctx_main):,.0f}  median {statistics.median(ctx_main):,.0f}  "
           f"p90 {sorted(ctx_main)[int(0.9 * len(ctx_main))]:,}")
@@ -256,7 +263,8 @@ def main():
         n, b, t = hook_turns[key], hook_broke[key], hook_tokens[key]
         print(f"  {key[0]:6} {key[1]:3}  boundaries {n:7,}  full re-writes {b:5,}  {100 * b / n:5.2f}%  tokens {t:13,}")
     unexpl = ledger["unexplained (old client versions)"]
-    vers = sorted(((k, v) for k, v in unexpl.items() if k.startswith("2.")), key=lambda x: -x[1])[:5]
+    # everything else in this Counter is a per-version count; matching "2." would hide a 3.x client
+    vers = sorted(((k, v) for k, v in unexpl.items() if k not in ("events", "tokens", "usd")), key=lambda x: -x[1])[:5]
     print(f"\nunexplained re-writes by version (top 5): {vers}")
 
 

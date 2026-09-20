@@ -18,7 +18,8 @@ cache. Each break is classified by what can be observed in the log:
     python tools/breaks.py --project myrepo --last 0
     python tools/breaks.py --top 20         # list the 20 largest breaks
 
-Shares are computed against all cache_creation tokens in the same transcripts.
+Shares are computed against all main-thread cache_creation tokens in the same
+transcripts (subagent calls, isSidechain, are excluded, as in ledger.py).
 On the 30 sessions in report/cache-forensics.md, 36 breaks held 68% of all
 cache writes.
 """
@@ -29,7 +30,7 @@ import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sessions import iter_calls, transcripts  # noqa: E402
+from sessions import ctx, iter_calls, rewrote, transcripts  # noqa: E402
 from _common import ts  # noqa: E402
 
 import json
@@ -52,8 +53,7 @@ def compact_timestamps(path):
 
 def classify(prev, cur, compacts):
     gap_min = (ts(cur["ts"]) - ts(prev["ts"])).total_seconds() / 60 if cur["ts"] and prev["ts"] else -1
-    prev_ctx = prev["input"] + prev["cache_creation"] + prev["cache_read"]
-    cur_ctx = cur["input"] + cur["cache_creation"] + cur["cache_read"]
+    prev_ctx, cur_ctx = ctx(prev), ctx(cur)
     if gap_min > 60:
         kind = "ttl"
     elif any(prev["ts"] <= c <= cur["ts"] for c in compacts):
@@ -84,9 +84,12 @@ def main():
     n_calls = 0
     n_sessions = 0
     for path in transcripts(args.project, args.last):
-        calls = list(iter_calls(path))
-        if len(calls) < args.min_calls:
+        # --min-calls counts every call, as ledger.py does, so the tools select the same sessions
+        calls_all = list(iter_calls(path))
+        if len(calls_all) < args.min_calls:
             continue
+        # subagent calls (isSidechain) run on their own prefix; a pair across them is not a main-thread gap
+        calls = [c for c in calls_all if not c["side"]]
         n_sessions += 1
         n_calls += len(calls)
         total_writes += sum(c["cache_creation"] for c in calls)
@@ -94,8 +97,7 @@ def main():
         sid = os.path.basename(path)[:8]
         for i in range(1, len(calls)):
             prev, cur = calls[i - 1], calls[i]
-            prev_ctx = prev["input"] + prev["cache_creation"] + prev["cache_read"]
-            if not (cur["cache_creation"] > 0.2 * prev_ctx and cur["cache_creation"] > 20000):
+            if not rewrote(cur["cache_creation"], ctx(prev)):
                 continue
             kind, gap, pctx, cctx = classify(prev, cur, compacts)
             kinds[kind] += 1

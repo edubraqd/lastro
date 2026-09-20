@@ -23,13 +23,24 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import CLAUDE_DIR  # noqa: E402,F401  (also fixes stdout encoding)
+from _common import CLAUDE_DIR, PROJECTS  # noqa: E402,F401  (ab-route imports CLAUDE_DIR from here; import also fixes stdout encoding)
 
 # A resumed or forked session copies the whole transcript into a new file, so the
 # same API calls appear in two files. This set is shared across every transcript
 # read in one run; process files oldest-first so the original keeps its calls
 # and the copy only counts what it added.
 GLOBAL_SEEN = set()
+
+
+def ctx(c):
+    """Tokens the call carried in (input + cache write + cache read): the context the next call inherits."""
+    return c["input"] + c["cache_creation"] + c["cache_read"]
+
+
+def rewrote(cache_creation, prev_ctx):
+    """The break definition every tool shares: > 20% of the previous context and > 20k.
+    AUDIT.md §3 tells the reader to vary the thresholds; this is the place to do it."""
+    return cache_creation > 0.2 * prev_ctx and cache_creation > 20000
 
 
 def iter_calls(path, seen=None):
@@ -63,6 +74,8 @@ def iter_calls(path, seen=None):
                 "cache_creation": u.get("cache_creation_input_tokens") or 0,
                 "cache_read": u.get("cache_read_input_tokens") or 0,
                 "output": u.get("output_tokens") or 0,
+                # subagent call: interleaved in the same file, not consecutive with the main thread
+                "side": bool(d.get("isSidechain")),
             }
 
 
@@ -87,12 +100,19 @@ def first_prompt(path):
 
 
 def transcripts(project_filter, last):
-    paths = glob.glob(os.path.join(CLAUDE_DIR, "projects", "*", "*.jsonl"))
+    paths = glob.glob(os.path.join(PROJECTS, "*", "*.jsonl"))
     if project_filter:
         paths = [p for p in paths if project_filter.lower() in os.path.basename(os.path.dirname(p)).lower()]
-    paths.sort(key=os.path.getmtime, reverse=True)
-    paths = paths[:last] if last else paths
-    return sorted(paths, key=os.path.getmtime)
+    # Equal mtimes (cp, archive extraction) would leave a fork/resume copy and its
+    # original to directory order, which differs per filesystem and can hand every
+    # call to the copy. The copy is a superset, so size breaks the tie; basename
+    # pins it. Distinct but meaningless mtimes (git checkout order) are not covered.
+    def key(p):
+        st = os.stat(p)
+        return st.st_mtime, st.st_size, os.path.basename(p)
+    paths.sort(key=key, reverse=True)
+    paths = paths[:last] if last > 0 else paths   # a negative slice would drop the oldest file in silence
+    return sorted(paths, key=key)
 
 
 def summarize(path, min_calls):
@@ -111,7 +131,7 @@ def summarize(path, min_calls):
         "calls": len(calls),
         "first_cache_creation": c0["cache_creation"],
         "first_cache_read": c0["cache_read"],
-        "context_median": int(statistics.median(c["input"] + c["cache_creation"] + c["cache_read"] for c in calls)),
+        "context_median": int(statistics.median(ctx(c) for c in calls)),
         "prompt": first_prompt(path).replace("\n", " "),
         **tot,
     }
@@ -136,9 +156,12 @@ def main():
     ap.add_argument("--json", action="store_true", help="print one JSON object per session")
     args = ap.parse_args()
 
-    rows = [r for r in (summarize(p, args.min_calls) for p in transcripts(args.project, args.last)) if r]
+    paths = transcripts(args.project, args.last)
+    if not paths:
+        sys.exit("no transcripts under %s%s" % (PROJECTS, " matching --project %s" % args.project if args.project else ""))
+    rows = [r for r in (summarize(p, args.min_calls) for p in paths) if r]
     if not rows:
-        sys.exit("no transcripts found under " + os.path.join(CLAUDE_DIR, "projects"))
+        sys.exit("no transcripts with >= %d calls under %s" % (args.min_calls, PROJECTS))
 
     if args.json:
         for r in rows:

@@ -24,7 +24,10 @@ readStdin(data => {
   if (ctx < LIMIT) return;
 
   const sid = sessionId(data);
+  // null = the file exists but did not parse (another session mid-write): without it
+  // there is no way to tell whether this session already got its handoff; next turn.
   const peaks = readPeaks();
+  if (!peaks) return;
   const p = peaks[sid] || { peak: 0, turns_above: 0, project: data.cwd || '' };
   if (p.handoff) return;
 
@@ -32,6 +35,7 @@ readStdin(data => {
   const file = path.join(cwd, '.claude', 'handoff-' + sid.slice(0, 8) + '.md');
   p.handoff = file;
   p.handoff_at = new Date().toISOString();
+  p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
   peaks[sid] = p;
   writePeaks(peaks);
 

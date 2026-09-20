@@ -25,7 +25,7 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ledger import load  # noqa: E402
+from ledger import load, prices  # noqa: E402
 from sessions import transcripts  # noqa: E402
 from _common import ts  # noqa: E402
 
@@ -49,7 +49,7 @@ def add_session(b, calls, price, cap):
     peak = 0
     for c in calls:
         b["calls"] += 1
-        b["usd"] += c["input"] * price["input"] + c["cr"] * price["cr"] + c["cw"] * price["cw"] + c["out"] * price["out"]
+        b["usd"] += c["input"] * price["input"] + c["cr"] * price["cr"] + c["cw"] * price["cw1h"] + c["out"] * price["out"]
         b["cr"] += c["cr"]
         b["cw"] += c["cw"]
         b["out"] += c["out"]
@@ -86,14 +86,14 @@ def row(b, price, cap):
         "ctx_p90": int(p90(b["ctx"])),
         "over_cap_pct": round(100 * b["over"] / len(b["ctx"]), 1) if b["ctx"] else 0,
         "peak_median": int(statistics.median(b["peak"])) if b["peak"] else 0,
-        "ttl_events": b["ttl"], "ttl_usd": round(b["ttl_tok"] * price["cw"], 2),
+        "ttl_events": b["ttl"], "ttl_usd": round(b["ttl_tok"] * price["cw1h"], 2),
         "first_cw_median": int(statistics.median(b["first_cw"])) if b["first_cw"] else 0,
         "out_per_call": round(b["out"] / b["calls"], 1) if b["calls"] else 0,
         "compact": b["compact"],
         "calls_per_session_median": int(statistics.median(b["sess_calls"])) if b["sess_calls"] else 0,
         "share": {
             "cache_read": round(100 * b["cr"] * price["cr"] / b["usd"], 1) if b["usd"] else 0,
-            "cache_write": round(100 * b["cw"] * price["cw"] / b["usd"], 1) if b["usd"] else 0,
+            "cache_write": round(100 * b["cw"] * price["cw1h"] / b["usd"], 1) if b["usd"] else 0,
             "output": round(100 * b["out"] * price["out"] / b["usd"], 1) if b["usd"] else 0,
         },
     }
@@ -130,8 +130,7 @@ def main():
     split = dt.date.fromisoformat(args.split)
     lo = (split - dt.timedelta(days=args.days)).isoformat() if args.days else "0000"
     hi = (split + dt.timedelta(days=args.days)).isoformat() if args.days else "9999"
-    P = args.price_input / 1e6
-    price = {"input": P, "cr": 0.1 * P, "cw": 2.0 * P, "out": 5.0 * P}
+    price = prices(args.price_input)
 
     seen = set()
     periods = {"before": new_bucket(), "after": new_bucket()}

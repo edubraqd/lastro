@@ -16,6 +16,9 @@ readStdin(data => {
   if (data.tool_name !== 'Read') return;
   const inp = data.tool_input || {};
   if (!inp.file_path || !inp.limit || inp.pages) return;
+  // Read answers image/pdf/notebook Reads without lines; an injected limit reaches those too.
+  const r = data.tool_response;
+  if (r && typeof r === 'object' && r.type && r.type !== 'text') return;
   let st;
   try { st = fs.statSync(inp.file_path); } catch (_) { return; }
   if (!st.isFile() || st.size > 50 * 1024 * 1024) return;

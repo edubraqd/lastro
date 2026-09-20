@@ -84,17 +84,21 @@ def compare(prev, cur, label=""):
 
 def load_log():
     rows = []
-    for line in open(LOG, encoding="utf-8"):
-        try:
-            rows.append(json.loads(line))
-        except ValueError:
-            pass
+    with open(LOG, encoding="utf-8") as fh:
+        for line in fh:
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                pass
     return [r for r in rows if r.get("kind", r.get("tipo")) == "real" and r.get("n_msgs")]
 
 
 def body_for(sha):
     hits = sorted(glob.glob(os.path.join(BODIES, "*-" + sha + ".json")))
-    return json.load(open(hits[-1], encoding="utf-8")) if hits else None
+    if not hits:
+        return None
+    with open(hits[-1], encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def main():
@@ -104,7 +108,8 @@ def main():
     args = ap.parse_args()
 
     if len(args.files) == 2:
-        compare(json.load(open(args.files[0], encoding="utf-8")), json.load(open(args.files[1], encoding="utf-8")))
+        with open(args.files[0], encoding="utf-8") as fa, open(args.files[1], encoding="utf-8") as fb:
+            compare(json.load(fa), json.load(fb))
         return
 
     rows = load_log()
@@ -120,7 +125,7 @@ def main():
             is_break = cw > 0.2 * pctx and cw > 20000
             if is_break or args.all:
                 found += 1
-                print(f"{r['ts']}  {'BREAK' if is_break else 'pair '}  prev ctx {pctx:,} -> cw {cw:,} cr {u.get('cache_read_input_tokens'):,}  "
+                print(f"{r['ts']}  {'BREAK' if is_break else 'pair '}  prev ctx {pctx:,} -> cw {cw:,} cr {u.get('cache_read_input_tokens') or 0:,}  "
                       f"model {r.get('model')}  bodies {prev.get('body_sha')} -> {r.get('body_sha')}")
                 pb, cb = body_for(prev.get("body_sha")), body_for(r.get("body_sha"))
                 if pb and cb:

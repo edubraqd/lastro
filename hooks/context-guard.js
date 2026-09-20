@@ -24,17 +24,24 @@ readStdin(data => {
   const ctx = currentContext(data.transcript_path);
   if (!ctx) return;
 
+  // null = the file exists but could not be read or parsed (another session mid-write): warn, do not write.
   const peaks = readPeaks();
   const sid = sessionId(data);
-  const p = peaks[sid] || { peak: 0, turns_above: 0, project: data.cwd || '' };
+  const p = (peaks && peaks[sid]) || { peak: 0, turns_above: 0, project: data.cwd || '' };
   p.peak = Math.max(p.peak, ctx);
   p.last = new Date().toISOString();
+  p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
   // Route tag for A/B of launch paths (tools/ab-route.py): a session launched
   // through a local proxy inherits ANTHROPIC_BASE_URL on loopback.
   p.route = /127\.0\.0\.1|localhost/.test(process.env.ANTHROPIC_BASE_URL || '') ? 'proxy' : 'direct';
   if (ctx >= LIMIT) p.turns_above += 1;
-  peaks[sid] = p;
-  writePeaks(peaks);
+  if (peaks) {
+    peaks[sid] = p;
+    // Bookkeeping only: a failed write must not swallow the warning below.
+    try { writePeaks(peaks); } catch (e) {
+      process.stderr.write('context-guard.js: ' + String(e.message || e).replace(/\s+/g, ' ') + '\n');
+    }
+  }
 
   if (ctx < LIMIT) return;
   process.stdout.write(JSON.stringify({

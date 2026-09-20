@@ -9,30 +9,20 @@ it records the non-message lines the transcript holds between the two calls
 (attachments, mode changes, system events) and reports the re-write rate when
 each is present, plus the rate by version and by previous-context size.
 
-    python tools/rewrites.py --last 0
+    python tools/rewrites.py              # everything (the 641-session figure below)
+    python tools/rewrites.py --last 30    # the 30 most recent transcripts
 
 Output of 2026-09-14 on 641 sessions is in report/findings.md §4.
 """
 import argparse
-import json
 import os
 import sys
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import transcripts  # noqa: E402
+from ledger import load, PREFIX_EVENTS  # noqa: E402
 from _common import ts  # noqa: E402
-
-# events that change the request prefix (tools, system prompt, params) — a
-# re-write right after one of these has a visible cause
-PREFIX_EVENTS = {
-    "attachment:deferred_tools_delta", "attachment:mcp_instructions_delta", "attachment:skill_listing",
-    "attachment:ultra_effort_enter", "system:model_refusal_fallback", "system:api_error",
-    "attachment:dynamic_skill", "attachment:nested_memory", "attachment:directory", "attachment:file",
-    "attachment:goal_status", "attachment:remote_session_change", "attachment:auto_mode",
-    "permission-mode", "attachment:date_change",
-}
-SKIP = {"assistant", "user", "queue-operation", "last-prompt"}
 
 
 def band(ctx):
@@ -42,7 +32,7 @@ def band(ctx):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--project")
-    ap.add_argument("--last", type=int, default=30)
+    ap.add_argument("--last", type=int, default=0, help="most recent N transcripts (0 = all)")
     ap.add_argument("--min-calls", type=int, default=5)
     args = ap.parse_args()
 
@@ -50,58 +40,27 @@ def main():
     n_all = Counter(); n_broke = Counter()          # keyed by feature / version / band / turn kind
     unexplained = []
     for path in transcripts(args.project, args.last):
-        lines = []
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                try:
-                    lines.append(json.loads(raw))
-                except ValueError:
-                    pass
-        calls = []
-        for i, d in enumerate(lines):
-            if d.get("type") != "assistant":
-                continue
-            m = d.get("message") or {}
-            u = m.get("usage")
-            if not u:
-                continue
-            key = (m.get("id"), d.get("requestId"))
-            if key in seen:
-                continue
-            seen.add(key)
-            calls.append((i, d.get("timestamp", ""), m.get("model", ""), d.get("version", ""),
-                          (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0),
-                          u.get("cache_creation_input_tokens") or 0, u.get("cache_read_input_tokens") or 0))
+        calls = load(path, seen)
         if len(calls) < args.min_calls:
             continue
         sid = os.path.basename(path)[:8]
         for j in range(1, len(calls)):
-            pi, pts, pm, _, pctx, _, _ = calls[j - 1]
-            ci, cts, cm, cv, cctx, cw, cr = calls[j]
-            if pctx < 20000 or not pts or not cts:
+            p, c = calls[j - 1], calls[j]
+            pctx = p["input"] + p["cw"] + p["cr"]
+            cctx = c["input"] + c["cw"] + c["cr"]
+            if pctx < 20000 or not p["ts"] or not c["ts"]:
                 continue
-            gap = (ts(cts) - ts(pts)).total_seconds() / 60
-            if gap > 60 or pm != cm or "synthetic" in pm or cctx < 0.7 * pctx:
+            gap = (ts(c["ts"]) - ts(p["ts"])).total_seconds() / 60
+            if gap > 60 or p["model"] != c["model"] or "synthetic" in p["model"] or cctx < 0.7 * pctx:
                 continue
-            broke = cw > 0.2 * pctx and cw > 20000 and cr <= 60000
-            feats = set()
-            for d in lines[pi + 1:ci]:
-                t = d.get("type")
-                if t in SKIP:
-                    continue
-                feats.add(t)
-                if t == "system":
-                    feats.add("system:" + str(d.get("subtype")))
-                if t == "attachment":
-                    feats.add("attachment:" + str((d.get("attachment") or {}).get("type")))
-            prev_tool = any(isinstance(b, dict) and b.get("type") == "tool_use"
-                            for b in ((lines[pi].get("message") or {}).get("content") or []))
-            keys = ["(all)", "turn:" + ("tool" if prev_tool else "user"), "ver:" + cv, "ctx:" + band(pctx)] + sorted(feats)
+            broke = c["cw"] > 0.2 * pctx and c["cw"] > 20000 and c["cr"] <= 60000
+            feats = c["events"]
+            keys = ["(all)", "turn:" + ("tool" if p["tool_turn"] else "user"), "ver:" + c["version"], "ctx:" + band(pctx)] + sorted(feats)
             for k in keys:
                 n_all[k] += 1
                 n_broke[k] += broke
             if broke and not (feats & PREFIX_EVENTS):
-                unexplained.append((sid, cv, cw, pctx))
+                unexplained.append((sid, c["version"], c["cw"], pctx))
 
     def show(prefix, min_n=20):
         rows = [(k, n_all[k], n_broke[k]) for k in n_all if k.startswith(prefix) and n_all[k] >= min_n]

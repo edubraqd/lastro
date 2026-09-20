@@ -74,7 +74,8 @@ are worth their attention.
 without `--dry-run` it installs four hooks (context guard, batch eviction,
 handoff load with a context canary, read recovery) referencing this checkout.
 `--uninstall` reverts. See the README for the knobs. The hooks implement
-rules 3 and 6 mechanically; they do not change any code.
+rule 3 above 150k tokens and rule 6 mechanically; below 150k, rule 3 is still
+on you. They do not change any code.
 
 ## A block you can paste into a project's CLAUDE.md
 
