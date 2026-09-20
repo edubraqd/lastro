@@ -490,6 +490,56 @@ class ToolsTest(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertNotIn("UnicodeEncodeError", r.stderr)
 
+    # --- handoff_dups.py / race_test.py (20/09 verification round) ---------------
+
+    def _handoff_tree(self):
+        """Three sessions in one project: two got handoff-aaaaaaaa.md (one is a duplicate),
+        one got handoff-bbbbbbbb.md; each with a few API calls so the re-read cost is > 0."""
+        root = os.path.join(self.tmp, "dups"); cfg = os.path.join(root, "claude")
+        proj = os.path.join(cfg, "projects", "D--proj-h"); os.makedirs(proj, exist_ok=True)
+        def inj(name, chars):
+            return {"type": "attachment", "timestamp": "2026-09-14T10:00:00.000Z",
+                    "attachment": {"type": "hook_additional_context", "hookEvent": "SessionStart",
+                                   "content": ["HANDOFF DA SESSAO ANTERIOR (%s, ha 0.5 h). x\n<handoff file=\"%s\">\n%s\n</handoff>" % (name, name, "y" * chars)]}}
+        for sid, name, ncalls in (("h1", "handoff-aaaaaaaa.md", 3), ("h2", "handoff-aaaaaaaa.md", 5), ("h3", "handoff-bbbbbbbb.md", 2)):
+            lines = [inj(name, 350)] + fixture._lines(fixture.S1_CALLS[:ncalls], sid)
+            with open(os.path.join(proj, sid + ".jsonl"), "w", encoding="utf-8") as fh:
+                for l in lines:
+                    fh.write(json.dumps(l, ensure_ascii=False) + "\n")
+        return cfg
+
+    def test_handoff_dups_counts_files_loaded_into_more_than_one_session(self):
+        cfg = self._handoff_tree()
+        r = run_tool("handoff_dups.py", "--json", cfg=cfg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual((d["injections"], d["files"], d["files_in_2_or_more"], d["extra_injections"]), (3, 2, 1, 1))
+        self.assertEqual(d["top"][0]["file"], "handoff-aaaaaaaa.md")
+        self.assertEqual(d["top"][0]["sessions"], 2)
+        # the duplicate rode in h2 (5 calls): chars/3.5 tokens x 5 calls re-read, once written
+        self.assertAlmostEqual(d["extra_reread_tokens"], d["top"][0]["chars"] / 3.5 * 5, delta=1)
+        self.assertGreater(d["extra_usd"], 0)
+        self.assertNotIn("yyyy", r.stdout, "aggregates only: no transcript text")
+        r = run_tool("handoff_dups.py", cfg=cfg)
+        self.assertIn("handoff-aaaaaaaa.md", r.stdout)
+        self.assertIn("x2", r.stdout)
+
+    def test_handoff_dups_exits_nonzero_without_injections(self):
+        r = run_tool("handoff_dups.py", cfg=self.cfg)   # the plain fixture has no hook lines
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no handoff injection", r.stderr)
+
+    def test_race_test_loads_each_handoff_into_exactly_one_session(self):
+        # the sandbox race that found the missing lock: with the lock, "delivered" is 1 per file
+        r = run_tool("race_test.py", "--n", "8", "--files", "2", "--rounds", "2", "--json", cfg=os.path.join(self.tmp, "race-home"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(len(d["rounds"]), 2)
+        for rnd in d["rounds"]:
+            self.assertEqual(rnd["delivered_max"], 1, rnd)
+            self.assertEqual(rnd["marked"], 2, "every delivered file is marked in the sandbox peaks")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "race-home", "race_proj")), "sandbox removed")
+
 
 if __name__ == "__main__":
     unittest.main()

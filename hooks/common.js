@@ -79,7 +79,8 @@ function lockPeaks(timeoutMs) {
       fs.closeSync(fs.openSync(lockPath, 'wx'));
       return () => { try { fs.unlinkSync(lockPath); } catch (_) { /* already gone */ } };
     } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+      // Windows answers EPERM, not EEXIST, for a lock another process is just deleting.
+      if (e.code !== 'EEXIST' && e.code !== 'EPERM') throw e;
       let age = 0;
       try { age = Date.now() - fs.statSync(lockPath).mtimeMs; } catch (_) { /* released meanwhile */ }
       if (age > 10000) { try { fs.unlinkSync(lockPath); } catch (_) { /* someone else did */ } continue; }
