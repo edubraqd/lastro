@@ -15,7 +15,7 @@
 'use strict';
 const fs = require('fs');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin, lockPeaks } = require('./common');
 
 const LIMIT = parseInt(process.env.CONTEXT_LIMIT, 10) || 200000;
 
@@ -24,8 +24,13 @@ readStdin(data => {
   const ctx = currentContext(data.transcript_path);
   if (!ctx) return;
 
+  // The lock serialises read -> write across sessions; without it the warning still goes out.
+  let unlock = null;
+  try { unlock = lockPeaks(); } catch (e) {
+    process.stderr.write('context-guard.js: ' + String(e.message || e).replace(/\s+/g, ' ') + '\n');
+  }
   // null = the file exists but could not be read or parsed (another session mid-write): warn, do not write.
-  const peaks = readPeaks();
+  const peaks = unlock ? readPeaks() : null;
   const sid = sessionId(data);
   const p = (peaks && peaks[sid]) || { peak: 0, turns_above: 0, project: data.cwd || '' };
   p.peak = Math.max(p.peak, ctx);
@@ -42,6 +47,7 @@ readStdin(data => {
       process.stderr.write('context-guard.js: ' + String(e.message || e).replace(/\s+/g, ' ') + '\n');
     }
   }
+  if (unlock) unlock();
 
   if (ctx < LIMIT) return;
   process.stdout.write(JSON.stringify({

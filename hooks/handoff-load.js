@@ -20,9 +20,11 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
-const { readStdin, readPeaks, writePeaks } = require('./common');
+const { readStdin, readPeaks, writePeaks, lockPeaks, projectDir } = require('./common');
 
-const HOURS = parseFloat(process.env.HANDOFF_HOURS) || 72;
+// HANDOFF_HOURS=0 turns the handoff off (a harness of `claude -p` runs opts out);
+// `parseFloat(x) || 72` used to swallow the 0.
+const HOURS = (v => isNaN(v) ? 72 : v)(parseFloat(process.env.HANDOFF_HOURS));
 const CANARY = process.env.CANARY !== '0';
 const NAME = process.env.CANARY_NAME || 'Lastro';
 
@@ -32,12 +34,14 @@ readStdin(data => {
   let gen = 1;
   const sid = data.session_id || '';
 
-  const dir = path.join(data.cwd || process.cwd(), '.claude');
+  const dir = path.join(projectDir(data), '.claude');   // the root, not the cd target
   // The path this session itself would write: the canary's TRIP names it.
   const own = sid ? path.join(dir, 'handoff-' + sid.slice(0, 8) + '.md') : null;
   const msg = e => String(e.message || e).replace(/\s+/g, ' ');
   try {
-    if (fs.existsSync(dir)) {
+    if (HOURS <= 0) {
+      process.stderr.write('handoff-load: handoff off (HANDOFF_HOURS=0)\n');
+    } else if (fs.existsSync(dir)) {
       const cands = fs.readdirSync(dir)
         .filter(n => /^handoff-[0-9a-f]{8}\.md$/.test(n))
         .map(n => ({ n, p: path.join(dir, n), t: fs.statSync(path.join(dir, n)).mtimeMs }))
@@ -51,9 +55,16 @@ readStdin(data => {
         // the same file, newer than the load, counts as new): two sessions opened
         // in the same project must not both resume it, but the one already
         // consumed does not hide an older one still waiting.
-        const peaks = readPeaks();
+        // One session at a time between reading the marks and writing its own:
+        // parallel starts otherwise all read "not loaded" (measured 2-6 of 28).
+        let unlock = null;
+        try { unlock = lockPeaks(); } catch (e) {
+          process.stderr.write('handoff-load: skipping ' + cands[0].n + ': ' + msg(e) + '\n');
+          parts.push(S.handoffSkipped(cands[0].n, 'could not record the load: ' + msg(e)));
+        }
+        const peaks = unlock ? readPeaks() : null;
         let skipped = null;   // {n, why}: the newest file refused for a reason the model should know
-        for (const h of cands) {
+        if (unlock) try { for (const h of cands) {
           // exFAT reports an mtime up to 2 s ahead of the clock: never a negative age
           const age = Math.max(0, Date.now() - h.t) / 3600000;
           const owner = Object.keys(peaks || {}).find(s => s.startsWith(h.n.slice(8, 16)));
@@ -101,7 +112,7 @@ readStdin(data => {
           gen = 2;
           skipped = null;
           break;
-        }
+        } } finally { unlock(); }
         if (skipped) parts.push(S.handoffSkipped(skipped.n, skipped.why));
       }
     }

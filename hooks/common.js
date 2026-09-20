@@ -58,6 +58,37 @@ function writePeaks(peaks) {
   try { fs.renameSync(tmp, peaksPath); } catch (e) { fs.unlinkSync(tmp); throw e; }
 }
 
+// The root the session started in. stdin `cwd` follows the Bash tool's persisted
+// `cd` (the docs say so): 45 of 213 handoffs on one machine landed in a subfolder
+// and 26 were never loaded. CLAUDE_PROJECT_DIR stays put.
+function projectDir(data) {
+  return process.env.CLAUDE_PROJECT_DIR || data.cwd || process.cwd();
+}
+
+// Exclusive lock around read -> modify -> write of the peaks file. Sessions that
+// start in the same instant otherwise all read "not loaded" and the last rename
+// wins (measured: 28 parallel starts delivered one handoff to 2-6 of them, and
+// on Windows a rename over a file another process holds open fails with EPERM).
+// A lock older than 10 s belongs to a hook that died holding it and is removed.
+const lockPath = peaksPath + '.lock';
+function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function lockPeaks(timeoutMs) {
+  const until = Date.now() + (timeoutMs || 3000);
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(lockPath, 'wx'));
+      return () => { try { fs.unlinkSync(lockPath); } catch (_) { /* already gone */ } };
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let age = 0;
+      try { age = Date.now() - fs.statSync(lockPath).mtimeMs; } catch (_) { /* released meanwhile */ }
+      if (age > 10000) { try { fs.unlinkSync(lockPath); } catch (_) { /* someone else did */ } continue; }
+      if (Date.now() > until) throw new Error('peaks file locked by another session for ' + Math.round(age) + ' ms');
+      sleep(5 + Math.floor(Math.random() * 15));
+    }
+  }
+}
+
 function sessionId(data) {
   return data.session_id || path.basename(data.transcript_path, '.jsonl');
 }
@@ -80,4 +111,4 @@ function readStdin(cb) {
   });
 }
 
-module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, sessionId, k, readStdin };
+module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, lockPeaks, projectDir, sessionId, k, readStdin };

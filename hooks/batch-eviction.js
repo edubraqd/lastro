@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin, lockPeaks, projectDir } = require('./common');
 
 const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 150000;
 
@@ -26,18 +26,26 @@ readStdin(data => {
   const sid = sessionId(data);
   // null = the file exists but did not parse (another session mid-write): without it
   // there is no way to tell whether this session already got its handoff; next turn.
-  const peaks = readPeaks();
-  if (!peaks) return;
-  const p = peaks[sid] || { peak: 0, turns_above: 0, project: data.cwd || '' };
-  if (p.handoff) return;
+  let unlock;
+  try { unlock = lockPeaks(); } catch (e) {
+    process.stderr.write('batch-eviction.js: ' + String(e.message || e).replace(/\s+/g, ' ') + '\n');
+    return;   // next turn retries
+  }
+  let file;
+  try {
+    const peaks = readPeaks();
+    if (!peaks) return;
+    const p = peaks[sid] || { peak: 0, turns_above: 0, project: data.cwd || '' };
+    if (p.handoff) return;
 
-  const cwd = data.cwd || process.cwd();
-  const file = path.join(cwd, '.claude', 'handoff-' + sid.slice(0, 8) + '.md');
-  p.handoff = file;
-  p.handoff_at = new Date().toISOString();
-  p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
-  peaks[sid] = p;
-  writePeaks(peaks);
+    // Under the project root, not the folder the session has cd-ed into.
+    file = path.join(projectDir(data), '.claude', 'handoff-' + sid.slice(0, 8) + '.md');
+    p.handoff = file;
+    p.handoff_at = new Date().toISOString();
+    p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
+    peaks[sid] = p;
+    writePeaks(peaks);
+  } finally { unlock(); }
 
   process.stdout.write(JSON.stringify({
     decision: 'block',

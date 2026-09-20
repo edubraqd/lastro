@@ -57,8 +57,15 @@ class HooksTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
+    KNOBS = ('CONTEXT_LANG', 'CANARY', 'CANARY_NAME', 'HANDOFF_HOURS', 'CONTEXT_LIMIT', 'EVICTION_LIMIT', 'CLAUDE_PROJECT_DIR', 'ANTHROPIC_BASE_URL')
+
+    def hook_env(self, env=None):
+        # the machine's own settings env (CONTEXT_LANG=pt, CANARY_NAME=...) must not reach the hook under test
+        e = {k: v for k, v in os.environ.items() if k not in self.KNOBS}
+        return {**e, 'CLAUDE_CONFIG_DIR': self.cfg, **(env or {})}
+
     def run_hook_raw(self, hook, raw, env=None):
-        e = {**os.environ, 'CLAUDE_CONFIG_DIR': self.cfg, **(env or {})}
+        e = self.hook_env(env)
         return subprocess.run(['node', os.path.join(REPO, 'hooks', hook + '.js')], input=raw, capture_output=True, env=e)
 
     def run_hook(self, hook, payload, env=None):
@@ -731,6 +738,83 @@ class HooksTest(unittest.TestCase):
         r = self.run_py('tools/ab-route.py', '--since', '2000-01-01')
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('proxy', r.stdout)
+
+    # --- 20/09 verification round: cwd drift, HANDOFF_HOURS=0, parallel starts, skipped-newer note ---
+
+    def test_stop_hook_writes_the_handoff_under_the_project_root_not_the_cd_target(self):
+        # stdin cwd follows the Bash tool's persisted `cd`; CLAUDE_PROJECT_DIR is the root
+        # the session started in. 45 of 213 handoffs landed in a subfolder before this.
+        sub = os.path.join(self.cwd, 'sub', 'deeper'); os.makedirs(sub, exist_ok=True)
+        sid = 'e' * 16
+        o = self.run_hook('batch-eviction', {**self.base, 'cwd': sub, 'session_id': sid},
+                          {'EVICTION_LIMIT': '1000', 'CLAUDE_PROJECT_DIR': self.cwd})
+        want = os.path.join(self.cwd, '.claude', 'handoff-eeeeeeee.md')
+        self.assertIn(want, o['reason'], 'the handoff path is under the project root')
+        self.assertEqual(self.peaks()[sid]['handoff'], want)
+        self.assertNotIn(os.path.join('sub', 'deeper'), o['reason'])
+
+    def test_handoff_load_reads_from_the_project_root_not_the_cd_target(self):
+        sub = os.path.join(self.cwd, 'sub'); os.makedirs(sub, exist_ok=True)
+        self.seed_peaks('cafe1111' + '1' * 8)
+        f = os.path.join(self.proj, 'handoff-cafe1111.md')
+        self.addCleanup(os.remove, f)
+        with open(f, 'w', encoding='utf-8') as fh:
+            fh.write('# from root\n')
+        o = self.run_hook('handoff-load', {'source': 'startup', 'cwd': sub, 'session_id': 'f' * 16}, {'CLAUDE_PROJECT_DIR': self.cwd})
+        self.assertIn('# from root', o['hookSpecificOutput']['additionalContext'], 'a session that starts in a subfolder still loads the root handoff')
+
+    def test_handoff_hours_zero_turns_the_handoff_off_but_not_the_canary(self):
+        # `parseFloat('0') || 72` swallowed the switch; a harness of `claude -p` runs
+        # could not opt out and 24 of them consumed the project's live handoff.
+        self.seed_peaks('cafe2222' + '2' * 8)
+        f = os.path.join(self.proj, 'handoff-cafe2222.md')
+        self.addCleanup(os.remove, f)
+        with open(f, 'w', encoding='utf-8') as fh:
+            fh.write('# should stay out\n')
+        r = self.run_hook_raw('handoff-load', json.dumps({'source': 'startup', 'cwd': self.cwd, 'session_id': 'g' * 16}).encode(), {'HANDOFF_HOURS': '0'})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = r.stdout.decode('utf-8')
+        self.assertNotIn('# should stay out', out, 'HANDOFF_HOURS=0 loads nothing')
+        self.assertIn('**Lastro · t<N>', out, 'the canary still goes out')
+        self.assertIn('HANDOFF_HOURS=0', r.stderr.decode(), 'the skip is traced')
+        self.assertNotIn('handoff_loaded_by', json.dumps(self.peaks()), 'nothing was marked as loaded')
+
+    def _parallel(self, hook, payloads, env=None):
+        e = self.hook_env(env)
+        procs = [subprocess.Popen(['node', os.path.join(REPO, 'hooks', hook + '.js')], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=e) for _ in payloads]
+        for p, pl in zip(procs, payloads):   # feed every stdin before waiting on any: the hooks must overlap
+            p.stdin.write(json.dumps(pl).encode('utf-8')); p.stdin.close()
+        return [p.communicate() for p in procs]
+
+    def test_handoff_load_once_under_parallel_starts(self):
+        # 28 `claude -p` runs started together: without a lock around read->mark->write
+        # the newest file reached 2-3 of them (sandbox, 5 rounds). Exactly one.
+        for rnd in range(3):
+            owner = 'cafe5%d%d%d' % (rnd, rnd, rnd) + '5' * 8
+            self.seed_peaks(owner)
+            f = os.path.join(self.proj, 'handoff-' + owner[:8] + '.md')
+            with open(f, 'w', encoding='utf-8') as fh:
+                fh.write('# race %d\n' % rnd)
+            try:
+                outs = self._parallel('handoff-load', [{'source': 'startup', 'cwd': self.cwd, 'session_id': ('%02d' % i) * 8} for i in range(28)])
+            finally:
+                os.remove(f)
+            got = [o for o, e in outs if ('# race %d' % rnd).encode() in o]
+            self.assertEqual(len(got), 1, 'round %d: loaded by %d sessions' % (rnd, len(got)))
+            told = [o for o, e in outs if b'but was NOT loaded' in o]
+            self.assertEqual(len(told), 27, 'round %d: the other 27 are told it was taken (%d were)' % (rnd, len(told)))
+            self.assertIn(('handoff-' + self.peaks()[owner]['handoff_loaded_by'][:8] + '.md').encode(), got[0], 'the peaks mark names the session that got it')
+
+    def test_context_guard_keeps_every_session_under_parallel_writes(self):
+        # read-modify-write of the whole peaks file from N sessions at once: without a
+        # lock the last rename wins and other sessions' entries (and handoff marks) vanish.
+        sids = [('%02d' % i) * 8 for i in range(60)]
+        outs = self._parallel('context-guard', [{**self.base, 'session_id': s} for s in sids], {'CONTEXT_LIMIT': '99999999'})
+        for o, e in outs:
+            self.assertEqual(e, b'', 'no stderr under contention')
+        p = self.peaks()
+        self.assertTrue(all(s in p for s in sids), 'lost update: %d of 60 sessions missing' % sum(s not in p for s in sids))
 
 
 if __name__ == '__main__':
