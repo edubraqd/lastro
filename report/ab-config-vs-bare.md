@@ -12,6 +12,20 @@ runs**, by US$0.10 per run, entirely because the configured session writes a
 about three tasks per session the bare arm is cheaper; above it, the
 configured one is.
 
+## Caveat (2026-09-20): the config arm was contaminated
+
+Found on 20/09 with `tools/handoff_dups.py`: the SessionStart hook of this
+repo (`hooks/handoff-load.js`) cannot tell a `claude -p` run from an
+interactive session, so **all 24 config-arm runs started with a 3,834-char
+live handoff** written by an interactive session in the same project; the
+bare arm (`--setting-sources ""`) got it in 0/24. The config arm therefore
+measured the hook's injected note as well as the settings. `CANARY=0` did
+not turn the handoff off. The accuracy, call-count and output deltas below
+are not a clean estimate of "configuration vs bare"; the prefix-write cost
+difference is the least affected part. Rerunning needs `HANDOFF_HOURS=0`
+(which turns the handoff off since commit 7402af4). Filed upstream as a
+request for an interactive/headless signal in the hook input.
+
 Harness and per-run data: [experiments/ab-config-vs-bare](../experiments/ab-config-vs-bare/).
 
 ## Method

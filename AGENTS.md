@@ -50,7 +50,8 @@ every call), 30% cache writes (mostly a few large re-writes after a break),
 Controlled A/B, 48 runs, Opus 5: CLAUDE.md + memory + hooks + overrides gave
 100% vs 92% accuracy, 40% fewer calls, 40% less output, 60% less wall time,
 and cost US$0.10 *more* per one-task session — the 21k prefix write. From ~3
-tasks per session on, it is the cheaper arm. Do not strip a working
+tasks per session on, it is the cheaper arm. Caveat: the config arm also got a
+live 3,834-char handoff in 24/24 runs (bare 0/24), so it is not clean. Do not strip a working
 configuration to save the prefix; open fewer one-question sessions instead.
 Details: [report/ab-config-vs-bare.md](report/ab-config-vs-bare.md).
 

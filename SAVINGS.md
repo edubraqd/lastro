@@ -57,7 +57,9 @@ on, long sessions). Your shares will differ; the mechanisms will not.
    ([report/ab-config-vs-bare.md](report/ab-config-vs-bare.md)) the full
    configuration was 100% vs 92% accurate, made 40% fewer calls, and cost
    US$0.10 more per *one-task* session because of a 21k prefix write. From
-   three tasks per session on, it is the cheaper arm.
+   three tasks per session on, it is the cheaper arm. **Caveat:** the config arm
+   also got a live handoff injected in 24/24 runs (bare 0/24); not a clean
+   measurement — see the report's caveat.
 
 ## Confidence, per line
 

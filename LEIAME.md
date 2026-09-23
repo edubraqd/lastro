@@ -118,7 +118,7 @@ Os relatórios e as páginas de apoio estão em inglês.
 - **Uma configuração completa (CLAUDE.md + memória + hooks + overrides) acertou
   100% contra 92%, fez 40% menos chamadas e custou US$0,10 a mais por sessão
   de uma tarefa** — o prefixo de 21k que ela escreve a cada sessão nova, e que
-  nunca é servido do cache de outra sessão. Equilíbrio em ~3 tarefas por sessão.
+  nunca é servido do cache de outra sessão. Equilíbrio em ~3 tarefas por sessão. **Ressalva (20/09):** toda rodada do braço config também recebeu um handoff vivo de 3.834 caracteres pelo hook de SessionStart (24/24; bare 0/24), então o braço mediu o hook junto com a configuração — não trate estes números como limpos ([report](report/ab-config-vs-bare.md#caveat-2026-09-20-the-config-arm-was-contaminated)).
 - **Instalado de uma vez, o pacote cortou a conta real em 45% por chamada e
   58% por dia** nos cinco dias depois de 14/09 contra os catorze antes
   (contexto por chamada 262k → 134k, chamadas acima de 200k 64% → 13%,

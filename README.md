@@ -115,7 +115,7 @@ cash — but the proportions are the same.
 - **A full configuration (CLAUDE.md + memory + hooks + overrides) was 100%
   vs 92% accurate, made 40% fewer calls, and cost US$0.10 more per
   one-task session** — the 21k prefix it writes on every new session, which
-  is never served from another session's cache. Break-even ~3 tasks/session.
+  is never served from another session's cache. Break-even ~3 tasks/session. **Caveat (20/09):** every config-arm run also received a 3,834-char live handoff from the SessionStart hook (24/24; bare 0/24), so the arm measured the hook as well as the settings — treat these numbers as not clean ([report](report/ab-config-vs-bare.md#caveat-2026-09-20-the-config-arm-was-contaminated)).
 - **Installed all at once, the package cut the real bill 45% per call and
   58% per day** on the five days after 14/09 vs the fourteen before (context
   per call 262k → 134k, calls above 200k 64% → 13%, autocompact 17 → 0). A
