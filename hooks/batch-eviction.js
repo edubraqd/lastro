@@ -4,7 +4,8 @@
 //
 // When a turn ends with the context above the limit, ONCE per session, it
 // holds the Stop and makes the model write a handoff to
-// <cwd>/.claude/handoff-<session>.md and tell the user to run /clear.
+// <project root>/.claude/handoff-<session>.md (CLAUDE_PROJECT_DIR) and tell the
+// user to run /clear. HANDOFF_HOURS=0 turns it off, as in handoff-load.js.
 // handoff-load.js (SessionStart) re-injects that file after /clear.
 // Per-session record in ~/.claude/.context-peaks.json.
 //
@@ -16,9 +17,11 @@ const S = require('./lang');
 const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin, lockPeaks, projectDir } = require('./common');
 
 const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 150000;
+// Same reading as handoff-load.js: 0 = handoff off (nothing would load it).
+const HOURS = (v => isNaN(v) ? 72 : v)(parseFloat(process.env.HANDOFF_HOURS));
 
 readStdin(data => {
-  if (data.stop_hook_active) return;
+  if (HOURS <= 0 || data.stop_hook_active) return;
   if (!data.transcript_path || !fs.existsSync(data.transcript_path)) return;
   const ctx = currentContext(data.transcript_path);
   if (ctx < LIMIT) return;

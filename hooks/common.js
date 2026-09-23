@@ -69,21 +69,34 @@ function projectDir(data) {
 // start in the same instant otherwise all read "not loaded" and the last rename
 // wins (measured: 28 parallel starts delivered one handoff to 2-6 of them, and
 // on Windows a rename over a file another process holds open fails with EPERM).
-// A lock older than 10 s belongs to a hook that died holding it and is removed.
+// The lock holds the owner's pid. It is stale, and removed, when that pid is gone
+// (a hook killed at its 5 s timeout, install.py) or when it is older than 4 s:
+// no live hook holds it that long, and 10 s made every other session wait 3 s
+// and give up. process.kill(pid, 0): EPERM = alive (not ours), ESRCH = gone.
 const lockPath = peaksPath + '.lock';
 function sleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function alive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code !== 'ESRCH'; }
+}
+// NaN: empty (mid-create) or old format; 0: gone or unreadable.
+function holder() {
+  try { return parseInt(fs.readFileSync(lockPath, 'utf8'), 10); } catch (_) { return 0; }
+}
 function lockPeaks(timeoutMs) {
   const until = Date.now() + (timeoutMs || 3000);
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lockPath, 'wx'));
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
       return () => { try { fs.unlinkSync(lockPath); } catch (_) { /* already gone */ } };
     } catch (e) {
       // Windows answers EPERM, not EEXIST, for a lock another process is just deleting.
       if (e.code !== 'EEXIST' && e.code !== 'EPERM') throw e;
       let age = 0;
       try { age = Date.now() - fs.statSync(lockPath).mtimeMs; } catch (_) { /* released meanwhile */ }
-      if (age > 10000) { try { fs.unlinkSync(lockPath); } catch (_) { /* someone else did */ } continue; }
+      const pid = holder();
+      // Read again after the check: a holder that released and exited in between
+      // left the lock to another session, whose lock must not be removed.
+      if (age > 4000 || (pid > 0 && !alive(pid) && holder() === pid)) { try { fs.unlinkSync(lockPath); } catch (_) { /* someone else did */ } continue; }
       if (Date.now() > until) throw new Error('peaks file locked by another session for ' + Math.round(age) + ' ms');
       sleep(5 + Math.floor(Math.random() * 15));
     }

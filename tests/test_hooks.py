@@ -410,8 +410,13 @@ class HooksTest(unittest.TestCase):
         t = o['hookSpecificOutput']['additionalContext']
         self.assertIn(os.path.join(self.proj, 'handoff-abcdef12.md'), t, 'TRIP names the path this session would write')
         self.assertNotIn('<session>', t)
+        # fallback without session_id: the project root, where batch-eviction writes since 7402af4, not <cwd>
         o = self.run_hook('handoff-load', {'source': 'startup', 'cwd': self.cwd})
-        self.assertIn('<cwd>/.claude/handoff-<session>.md', o['hookSpecificOutput']['additionalContext'], 'fallback without session_id')
+        self.assertIn('<project root>/.claude/handoff-<session>.md', o['hookSpecificOutput']['additionalContext'], 'fallback without session_id')
+        self.assertNotIn('<cwd>', o['hookSpecificOutput']['additionalContext'])
+        o = self.run_hook('handoff-load', {'source': 'startup', 'cwd': self.cwd}, {'CONTEXT_LANG': 'pt'})
+        self.assertIn('<raiz do projeto>/.claude/handoff-<sessao>.md', o['hookSpecificOutput']['additionalContext'], 'fallback pt')
+        self.assertNotIn('<cwd>', o['hookSpecificOutput']['additionalContext'])
 
     def test_lang_tables_match(self):
         def shape(lang):
@@ -815,6 +820,77 @@ class HooksTest(unittest.TestCase):
             self.assertEqual(e, b'', 'no stderr under contention')
         p = self.peaks()
         self.assertTrue(all(s in p for s in sids), 'lost update: %d of 60 sessions missing' % sum(s not in p for s in sids))
+
+    # --- 23/09: HANDOFF_HOURS=0 in the Stop hook and the TRIP, stale lock vs the 5 s hook timeout ---
+
+    def test_handoff_hours_zero_turns_the_eviction_off(self):
+        # README/install.py promise 0 turns the handoff off for a batch of `claude -p`
+        # runs; the Stop hook kept blocking above 150k and asking for a handoff.
+        sid = 'h' * 16
+        r = self.run_hook_raw('batch-eviction', json.dumps({**self.base, 'session_id': sid}).encode(), {'EVICTION_LIMIT': '1000', 'HANDOFF_HOURS': '0'})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, b'', 'HANDOFF_HOURS=0: no block, no handoff request')
+        pk = self.peaks() if os.path.exists(os.path.join(self.cfg, '.context-peaks.json')) else {}
+        self.assertNotIn('handoff', pk.get(sid, {}), 'no handoff path recorded')
+        o = self.run_hook('batch-eviction', {**self.base, 'session_id': 'i' * 16}, {'EVICTION_LIMIT': '1000', 'HANDOFF_HOURS': '0.5'})
+        self.assertEqual(o['decision'], 'block', 'any positive value keeps the eviction on')
+
+    def test_handoff_hours_zero_trip_does_not_ask_for_a_handoff(self):
+        # a handoff written with HANDOFF_HOURS=0 is never loaded: the TRIP keeps
+        # stop / re-read / recommend /clear and drops the write.
+        for lang, write, reread in (('en', 'write the handoff', 're-read CLAUDE.md'), ('pt', 'escreva o handoff', 'releia o CLAUDE.md')):
+            r = self.run_hook_raw('handoff-load', json.dumps({'source': 'startup', 'cwd': self.cwd, 'session_id': SID}).encode(),
+                                  {'HANDOFF_HOURS': '0', 'CONTEXT_LANG': lang})
+            self.assertEqual(r.returncode, 0, r.stderr)
+            t = json.loads(r.stdout)['hookSpecificOutput']['additionalContext']
+            self.assertIn('TRIP', t, lang)
+            self.assertIn(reread, t, lang + ': the rest of the TRIP stays')
+            self.assertNotIn(write, t, lang + ': no handoff to write')
+            self.assertNotIn('handoff-abcdef12.md', t, lang)
+        o = self.run_hook('handoff-load', {'source': 'startup', 'cwd': self.cwd, 'session_id': SID})
+        self.assertIn('write the handoff', o['hookSpecificOutput']['additionalContext'], 'default keeps the write')
+
+    def _stale_lock(self, content, age_s):
+        lock = os.path.join(self.cfg, '.context-peaks.json.lock')
+        with open(lock, 'w', encoding='utf-8') as fh:
+            fh.write(content)
+        t = time.time() - age_s
+        os.utime(lock, (t, t))
+        self.addCleanup(lambda: os.path.exists(lock) and os.remove(lock))
+        return lock
+
+    def _guard_under_lock(self, sid):
+        t0 = time.time()
+        r = self.run_hook_raw('context-guard', json.dumps({**self.base, 'session_id': sid}).encode(), {'CONTEXT_LIMIT': '99999999'})
+        return r, time.time() - t0
+
+    def test_lock_of_a_dead_hook_is_broken_at_once(self):
+        # the hook timeout is 5 s (install.py): a hook killed holding the lock left
+        # every other session waiting 3 s and giving up until the lock was 10 s old.
+        dead = subprocess.Popen([sys.executable, '-c', 'pass']); dead.wait()
+        lock = self._stale_lock(str(dead.pid), 0)
+        sid = 'j' * 16
+        r, took = self._guard_under_lock(sid)
+        self.assertEqual(r.stderr, b'', 'the lock of a dead pid is not waited on')
+        self.assertLess(took, 2.5, 'broken at once, not after the 3 s wait')
+        self.assertIn(sid, self.peaks())
+        self.assertFalse(os.path.exists(lock), 'released after use')
+
+    def test_lock_without_pid_is_stale_before_the_hook_timeout(self):
+        # an old-format lock (no pid) 6 s old: its owner is past the 5 s hook timeout
+        self._stale_lock('', 6)
+        sid = 'k' * 16
+        r, _ = self._guard_under_lock(sid)
+        self.assertEqual(r.stderr, b'', 'a lock older than the hook timeout is broken')
+        self.assertIn(sid, self.peaks())
+
+    def test_lock_of_a_live_process_is_respected(self):
+        self._stale_lock(str(os.getpid()), 0)   # this test runner: alive
+        sid = 'l' * 16
+        r, _ = self._guard_under_lock(sid)
+        self.assertIn(b'locked by another session', r.stderr, 'a live holder is waited on, then given up')
+        pk = self.peaks() if os.path.exists(os.path.join(self.cfg, '.context-peaks.json')) else {}
+        self.assertNotIn(sid, pk, 'nothing written without the lock')
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@
 // handoff-load — SessionStart hook. Pair of batch-eviction.js.
 //
 // After /clear (or a new session in the same project) injects the newest
-// <cwd>/.claude/handoff-*.md that can be loaded: younger than HANDOFF_HOURS
+// <project root>/.claude/handoff-*.md that can be loaded: younger than HANDOFF_HOURS
 // (default 72), written by a session that ran on this machine, not loaded yet.
 // Files are walked newest to oldest: one that is foreign or already consumed
 // does not block an older own one; one that is too old ends the walk. The load
@@ -121,7 +121,8 @@ readStdin(data => {
     // must not cost the canary.
     process.stderr.write('handoff-load: skipping handoff: ' + msg(e) + '\n');
   }
-  if (CANARY) parts.push(S.canary(NAME, gen, own));
+  // HANDOFF_HOURS=0: nothing would load a handoff, so the TRIP does not ask for one.
+  if (CANARY) parts.push(S.canary(NAME, gen, HOURS > 0 ? own : false));
   if (!parts.length) return;
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {

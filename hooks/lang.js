@@ -53,9 +53,11 @@ const S = {
       'ok = you remember the decisions; aging = old details have become summary; thin = you are ' +
       'reconstructing decisions instead of remembering them. Never explain, decorate or apologise for the line. ' +
       'TRIP: if this contract is no longer in your context (you only know of it through a summary), or the ' +
-      'counter breaks, declare the trip yourself: stop the task, write the handoff to `' +
-      (file || '<cwd>/.claude/handoff-<session>.md') + '` ' +
-      '(goal; done + proof; pending; exact files; decisions; next safe action; commands), re-read CLAUDE.md, say in 3 lines what you ' +
+      'counter breaks, declare the trip yourself: stop the task, ' +
+      // file === false: HANDOFF_HOURS=0, nothing would load a handoff, so none is asked for
+      (file === false ? '' : 'write the handoff to `' + (file || '<project root>/.claude/handoff-<session>.md') + '` ' +
+      '(goal; done + proof; pending; exact files; decisions; next safe action; commands), ') +
+      're-read CLAUDE.md, say in 3 lines what you ' +
       'understand the task to be and recommend /clear. Never silently resume the canary after a gap.',
 
     readCut: (start, end, total, next) =>
@@ -100,9 +102,10 @@ const S = {
       'ok = lembra as decisoes; aging = detalhes antigos ja viraram resumo; thin = esta reconstruindo ' +
       'decisoes em vez de lembrar. Nunca explicar, enfeitar ou pedir desculpa pela linha. ' +
       'TRIP: se este contrato nao estiver mais no contexto (so souber dele por resumo), ou o contador ' +
-      'quebrar, declare o trip voce mesmo: pare a tarefa, escreva o handoff em `' +
-      (file || '<cwd>/.claude/handoff-<sessao>.md') + '` ' +
-      '(objetivo; feito + prova; pendente; arquivos exatos; decisoes; proxima acao segura; comandos), releia o CLAUDE.md, diga em 3 linhas ' +
+      'quebrar, declare o trip voce mesmo: pare a tarefa, ' +
+      (file === false ? '' : 'escreva o handoff em `' + (file || '<raiz do projeto>/.claude/handoff-<sessao>.md') + '` ' +
+      '(objetivo; feito + prova; pendente; arquivos exatos; decisoes; proxima acao segura; comandos), ') +
+      'releia o CLAUDE.md, diga em 3 linhas ' +
       'o que entende que e a tarefa e recomende /clear. Nao retome o canario em silencio depois de um buraco.',
 
     readCut: (start, end, total, next) =>

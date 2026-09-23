@@ -72,9 +72,14 @@ def main():
     ap.add_argument("--rounds", type=int, default=3)
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
-    base = os.environ.get("CLAUDE_CONFIG_DIR") or tempfile.mkdtemp(prefix="ccf-race-")
+    given = os.environ.get("CLAUDE_CONFIG_DIR")
+    base = given or tempfile.mkdtemp(prefix="ccf-race-")
     os.makedirs(base, exist_ok=True)
-    rounds = [one_round(base, a.n, a.files) for _ in range(a.rounds)]
+    try:
+        rounds = [one_round(base, a.n, a.files) for _ in range(a.rounds)]
+    finally:
+        if not given:   # ours: remove it; a dir the caller named is theirs (one_round already empties its sandbox)
+            shutil.rmtree(base, ignore_errors=True)
     worst = max(r["delivered_max"] for r in rounds)
     if a.json:
         print(json.dumps({"n": a.n, "files": a.files, "rounds": rounds, "worst": worst}, indent=1))
