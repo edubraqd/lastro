@@ -111,3 +111,46 @@ def build_side(root):
         for l in lines:
             fh.write(json.dumps(l, ensure_ascii=False) + "\n")
     return cfg, p3
+
+
+# build_subagents(): the layout Claude Code really writes since 2.1.x. The parent
+# transcript holds only main-thread calls; every subagent gets its own file under
+# <session>/subagents/ (workflow agents one level deeper), with isSidechain:true on
+# every line, 5m cache writes, and its own model. journal.jsonl and *.meta.json sit
+# beside them and carry no usage.
+SUBA_MAIN = [
+    ("2026-09-14T10:00:00.000Z", MODEL, 5, 100000, 0, 50),
+    ("2026-09-14T10:01:00.000Z", MODEL, 5, 1000, 100000, 50),
+    ("2026-09-14T10:02:00.000Z", MODEL, 5, 1000, 101000, 50),
+]
+SUBA_LATE = ("2026-09-16T10:00:00.000Z", MODEL, 5, 1000, 102000, 50)   # after --until 2026-09-15
+SUBA_A1 = [
+    ("2026-09-14T10:01:10.000Z", "claude-sonnet-5", 5, 40000, 0, 50),
+    ("2026-09-14T10:01:20.000Z", "claude-sonnet-5", 5, 1000, 40000, 50),
+]
+SUBA_A2 = [("2026-09-14T10:01:30.000Z", "claude-haiku-4-5-20251001", 5, 20000, 0, 50)]
+SUBA_SIDE_CW = sum(c[3] for c in SUBA_A1 + SUBA_A2)   # 61000, all 5m writes
+
+
+def _write(path, lines):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        for l in lines:
+            fh.write(json.dumps(l, ensure_ascii=False) + "\n")
+
+
+def build_subagents(root):
+    """Write the subagent tree under root. Returns (cfg_dir, s4_path)."""
+    cfg = os.path.join(root, "claude")
+    proj = os.path.join(cfg, "projects", "D--proj-c")
+    p4 = os.path.join(proj, "s4.jsonl")
+    _write(p4, _lines(SUBA_MAIN + [SUBA_LATE], "s4", side=False))
+    sub = os.path.join(proj, "s4", "subagents")
+    n = len(SUBA_MAIN) + 1
+    _write(os.path.join(sub, "agent-a1.jsonl"), _lines(SUBA_A1, "s4", start=n, side=True))
+    with open(os.path.join(sub, "agent-a1.meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"agentType": "Explore", "toolUseId": "toolu_1"}, fh)
+    wf = os.path.join(sub, "workflows", "wf_1")
+    _write(os.path.join(wf, "agent-a2.jsonl"), _lines(SUBA_A2, "s4", start=n + len(SUBA_A1), side=True))
+    _write(os.path.join(wf, "journal.jsonl"), [{"type": "started", "agentId": "a2"}])
+    return cfg, p4

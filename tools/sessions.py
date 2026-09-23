@@ -10,6 +10,10 @@ which is what the API actually billed.
     python tools/sessions.py --project myrepo   # projects whose dir name contains "myrepo"
     python tools/sessions.py --last 100 --min-calls 5
     python tools/sessions.py --json > sessions.json
+    python tools/sessions.py --no-subagents     # parent transcripts only (pre-2026-09-23 numbers)
+
+Subagent calls live in <session>/subagents/**/agent-*.jsonl, not in the parent
+transcript; they are billed, so they are added to the parent session's totals.
 
 Columns: first-call cache_creation / cache_read (the prefix that was written vs.
 served from a warm cache), totals per session, and the API-equivalent cost split
@@ -43,8 +47,8 @@ def rewrote(cache_creation, prev_ctx):
     return cache_creation > 0.2 * prev_ctx and cache_creation > 20000
 
 
-def iter_calls(path, seen=None):
-    """Yield one dict per API call (deduplicated) from a transcript."""
+def iter_calls(path, seen=None, side=False):
+    """Yield one dict per API call (deduplicated) from a transcript. side=True marks every call as subagent."""
     if seen is None:
         seen = GLOBAL_SEEN
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -74,8 +78,8 @@ def iter_calls(path, seen=None):
                 "cache_creation": u.get("cache_creation_input_tokens") or 0,
                 "cache_read": u.get("cache_read_input_tokens") or 0,
                 "output": u.get("output_tokens") or 0,
-                # subagent call: interleaved in the same file, not consecutive with the main thread
-                "side": bool(d.get("isSidechain")),
+                # subagent call (isSidechain here, or any line of a subagents/ file): not consecutive with the main thread
+                "side": side or bool(d.get("isSidechain")),
             }
 
 
@@ -99,6 +103,12 @@ def first_prompt(path):
     return ""
 
 
+def subagent_files(path):
+    """<proj>/<session>.jsonl -> its subagent transcripts (<session>/subagents/**/agent-*.jsonl), oldest first."""
+    found = glob.glob(os.path.join(path[:-len(".jsonl")], "subagents", "**", "agent-*.jsonl"), recursive=True)
+    return sorted(found, key=lambda p: (os.stat(p).st_mtime, os.path.basename(p)))
+
+
 def transcripts(project_filter, last):
     paths = glob.glob(os.path.join(PROJECTS, "*", "*.jsonl"))
     if project_filter:
@@ -115,8 +125,11 @@ def transcripts(project_filter, last):
     return sorted(paths, key=key)
 
 
-def summarize(path, min_calls):
+def summarize(path, min_calls, subagents=True):
     calls = list(iter_calls(path))
+    if subagents:
+        for f in subagent_files(path):
+            calls += iter_calls(f, side=True)
     if len(calls) < min_calls or not calls:
         return None
     tot = {k: sum(c[k] for c in calls) for k in ("input", "cache_creation", "cache_read", "output")}
@@ -131,7 +144,7 @@ def summarize(path, min_calls):
         "calls": len(calls),
         "first_cache_creation": c0["cache_creation"],
         "first_cache_read": c0["cache_read"],
-        "context_median": int(statistics.median(ctx(c) for c in calls)),
+        "context_median": int(statistics.median(ctx(c) for c in ([c for c in calls if not c["side"]] or calls))),
         "prompt": first_prompt(path).replace("\n", " "),
         **tot,
     }
@@ -154,12 +167,13 @@ def main():
     ap.add_argument("--last", type=int, default=30, help="most recently modified N transcripts (0 = all)")
     ap.add_argument("--min-calls", type=int, default=1)
     ap.add_argument("--json", action="store_true", help="print one JSON object per session")
+    ap.add_argument("--no-subagents", action="store_true", help="skip <session>/subagents/ transcripts")
     args = ap.parse_args()
 
     paths = transcripts(args.project, args.last)
     if not paths:
         sys.exit("no transcripts under %s%s" % (PROJECTS, " matching --project %s" % args.project if args.project else ""))
-    rows = [r for r in (summarize(p, args.min_calls) for p in paths) if r]
+    rows = [r for r in (summarize(p, args.min_calls, not args.no_subagents) for p in paths) if r]
     if not rows:
         sys.exit("no transcripts with >= %d calls under %s" % (args.min_calls, PROJECTS))
 

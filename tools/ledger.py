@@ -8,13 +8,21 @@ were written after an idle gap over 60 min; at 2x input price that is $X".
 Whether you would actually recover $X depends on what you do instead (see
 SAVINGS.md for the honest reading of each line).
 
-    python tools/ledger.py                    # all sessions, Opus list price
+    python tools/ledger.py                    # all sessions, list price by model
     python tools/ledger.py --last 100         # the 100 most recent transcripts
     python tools/ledger.py --price-input 5 --cap 200000 --ping-every 20 --max-pings 9
     python tools/ledger.py --json             # machine-readable
+    python tools/ledger.py --until 2026-09-15 --no-subagents --price-input 5   # the SAVINGS.md base
+
+Subagent transcripts (<session>/subagents/**/agent-*.jsonl) are counted by
+default as side calls of their parent session; the total is printed split into
+main thread and subagents. --no-subagents reads the parent transcripts only.
 
 Prices: input P, cache read 0.1 P, 1h cache write 2 P, 5m cache write 1.25 P,
-output 5 P (Anthropic price sheet multipliers; P = 5 for Opus-class models).
+output 5 P (Anthropic price sheet multipliers). P comes from each call's
+message.model (opus 5, sonnet 3, haiku 1, anything else 5); --price-input sets
+one flat P for every call. Writes with no TTL breakdown are priced as 1h.
+The levers below the total are priced at the flat P (default 5, Opus-class).
 The multipliers were confirmed by regression on Claude Code's own
 `total_cost_usd` (experiments/ab-config-vs-bare, residual 0).
 
@@ -28,7 +36,7 @@ import sys
 from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from sessions import transcripts  # noqa: E402
+from sessions import subagent_files, transcripts  # noqa: E402
 from _common import PROJECTS, ts  # noqa: E402
 
 SKIP = {"assistant", "user", "queue-operation", "last-prompt"}
@@ -48,8 +56,24 @@ def prices(per_m_input):
     return {"input": P, "cr": 0.1 * P, "cw1h": 2.0 * P, "cw5m": 1.25 * P, "out": 5.0 * P}
 
 
-def load(path, seen):
-    """One list of calls (dedup) with the transcript events that sit between them."""
+# US$ per M input tokens by model family (substring of message.model); anything else pays DEFAULT_P
+MODEL_P = (("opus", 5.0), ("sonnet", 3.0), ("haiku", 1.0))
+DEFAULT_P = 5.0
+
+
+def per_m_input(model):
+    return next((p for fam, p in MODEL_P if fam in (model or "")), DEFAULT_P)
+
+
+def call_usd(c, price):
+    """One call at one price sheet; the 5m part of the write at 1.25 P, the rest (1h or unlabelled) at 2 P."""
+    return {"cache_read": c["cr"] * price["cr"],
+            "cache_creation": c["cw5m"] * price["cw5m"] + (c["cw"] - c["cw5m"]) * price["cw1h"],
+            "output": c["out"] * price["out"], "input": c["input"] * price["input"]}
+
+
+def load(path, seen, side=False):
+    """One list of calls (dedup) with the transcript events that sit between them. side=True: a subagent file."""
     lines = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for raw in f:
@@ -73,7 +97,7 @@ def load(path, seen):
             cc = u.get("cache_creation") or {}
             calls.append({
                 "ts": d.get("timestamp", ""), "model": m.get("model", ""), "version": d.get("version", ""),
-                "side": bool(d.get("isSidechain")),
+                "side": side or bool(d.get("isSidechain")),
                 "input": u.get("input_tokens") or 0, "cw": u.get("cache_creation_input_tokens") or 0,
                 "cr": u.get("cache_read_input_tokens") or 0, "out": u.get("output_tokens") or 0,
                 "cw5m": cc.get("ephemeral_5m_input_tokens") or 0, "cw1h": cc.get("ephemeral_1h_input_tokens") or 0,
@@ -95,7 +119,10 @@ def main():
     ap.add_argument("--project")
     ap.add_argument("--last", type=int, default=0, help="most recent N transcripts (0 = all)")
     ap.add_argument("--min-calls", type=int, default=5)
-    ap.add_argument("--price-input", type=float, default=5.0, help="US$ per M input tokens (Opus-class: 5)")
+    ap.add_argument("--price-input", type=float, default=None,
+                    help="flat US$ per M input tokens for every call (default: by message.model)")
+    ap.add_argument("--until", help="YYYY-MM-DD: drop calls stamped after this day (UTC)")
+    ap.add_argument("--no-subagents", action="store_true", help="skip <session>/subagents/ transcripts")
     ap.add_argument("--cap", type=int, default=200000, help="context cap for the history-length ceiling")
     ap.add_argument("--ping-every", type=int, default=20, help="keep-alive ping interval, minutes")
     ap.add_argument("--max-pings", type=int, default=9, help="keep-alive gives up after this many pings")
@@ -103,10 +130,14 @@ def main():
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    price = prices(args.price_input)
+    price = prices(args.price_input or DEFAULT_P)
 
     seen = set()
     tot = Counter()
+    usd = Counter()
+    usd_who = Counter()             # main / side
+    usd_model = Counter()
+    n_side_calls = 0
     buckets = Counter()
     n_sessions = 0
     ledger = defaultdict(Counter)   # lever -> {"events", "tokens", "usd"}
@@ -119,12 +150,22 @@ def main():
 
     for path in transcripts(args.project, args.last):
         calls = load(path, seen)
+        if not args.no_subagents:
+            for f in subagent_files(path):
+                calls += load(f, seen, side=True)
+        if args.until:
+            calls = [c for c in calls if c["ts"][:10] <= args.until]
         if len(calls) < args.min_calls:
             continue
         n_sessions += 1
         for c in calls:
             for k in ("input", "cw", "cr", "out"):
                 tot[k] += c[k]
+            cu = call_usd(c, price if args.price_input else prices(per_m_input(c["model"])))
+            usd.update(cu)
+            usd_who["side" if c["side"] else "main"] += sum(cu.values())
+            usd_model[c["model"] or "?"] += sum(cu.values())
+            n_side_calls += c["side"]
             buckets[("side" if c["side"] else "main", "5m")] += c["cw5m"]
             buckets[("side" if c["side"] else "main", "1h")] += c["cw1h"]
             if not c["side"]:
@@ -216,13 +257,13 @@ def main():
     ledger["terse-output -8%"]["tokens"] = int(0.08 * tot["out"])
     ledger["terse-output -8%"]["usd"] = ledger["terse-output -8%"]["tokens"] * price["out"]
 
-    usd = {"cache_read": tot["cr"] * price["cr"], "cache_creation": tot["cw"] * price["cw1h"],
-           "output": tot["out"] * price["out"], "input": tot["input"] * price["input"]}
+    usd = {k: usd[k] for k in ("cache_read", "cache_creation", "output", "input")}
     total = sum(usd.values())
 
     if args.json:
-        print(json.dumps({"sessions": n_sessions, "calls_main": n_main_calls, "tokens": dict(tot), "usd": usd,
-                          "total_usd": total, "buckets": {f"{a}:{b}": v for (a, b), v in buckets.items()},
+        print(json.dumps({"sessions": n_sessions, "calls_main": n_main_calls, "calls_side": n_side_calls,
+                          "tokens": dict(tot), "usd": usd, "total_usd": total,
+                          "usd_main": usd_who["main"], "usd_side": usd_who["side"], "usd_by_model": dict(usd_model), "buckets": {f"{a}:{b}": v for (a, b), v in buckets.items()},
                           "ledger": {k: dict(v) for k, v in ledger.items()},
                           "ttl_gaps": {k: [ttl_gaps[k], ttl_gap_tokens[k]] for k in ttl_gaps},
                           "hook": {f"{a}:{b}": [hook_turns[(a, b)], hook_broke[(a, b)], hook_tokens[(a, b)]]
@@ -231,12 +272,19 @@ def main():
 
     if not ctx_main:
         sys.exit("no transcripts with >= %d calls under %s" % (args.min_calls, PROJECTS))
-    print(f"sessions {n_sessions:,}  main-thread calls {n_main_calls:,}  (min {args.min_calls} calls/session)")
+    print(f"sessions {n_sessions:,}  main-thread calls {n_main_calls:,}  subagent calls {n_side_calls:,}  "
+          f"(min {args.min_calls} calls/session{', until ' + args.until if args.until else ''})")
     print(f"context per main-thread call: mean {statistics.mean(ctx_main):,.0f}  median {statistics.median(ctx_main):,.0f}  "
           f"p90 {sorted(ctx_main)[int(0.9 * len(ctx_main))]:,}")
-    print(f"\nAPI-equivalent total at P={args.price_input}/M: ${total:,.2f}")
+    sheet = f"P={args.price_input}/M" if args.price_input else "P by model"
+    print(f"\nAPI-equivalent total at {sheet}: ${total:,.2f}")
     for k, v in usd.items():
         print(f"  {k:15} ${v:10,.2f}  {100 * v / total:4.0f}%")
+    for who, label in (("main", "main thread"), ("side", "subagents")):
+        print(f"  {label:15} ${usd_who[who]:10,.2f}  {100 * usd_who[who] / total:4.0f}%")
+    print("by model:")
+    for m, v in usd_model.most_common():
+        print(f"  {m:28} ${v:10,.2f}  {100 * v / total:4.0f}%")
     print("\ncache writes by TTL bucket (tokens):")
     for (who, b), v in sorted(buckets.items()):
         print(f"  {who:5} {b:3} {v:15,}")
