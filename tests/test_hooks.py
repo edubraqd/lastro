@@ -789,7 +789,7 @@ class HooksTest(unittest.TestCase):
         procs = [subprocess.Popen(['node', os.path.join(REPO, 'hooks', hook + '.js')], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=e) for _ in payloads]
         for p, pl in zip(procs, payloads):   # feed every stdin before waiting on any: the hooks must overlap
-            p.stdin.write(json.dumps(pl).encode('utf-8')); p.stdin.close()
+            p.stdin.write(json.dumps(pl).encode('utf-8')); p.stdin.close(); p.stdin = None   # else communicate() flushes a closed pipe (POSIX, <3.13)
         return [p.communicate() for p in procs]
 
     def test_handoff_load_once_under_parallel_starts(self):

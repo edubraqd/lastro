@@ -51,6 +51,7 @@ def one_round(base, n, files):
     for i, p in enumerate(procs):   # feed every stdin before waiting on any, so the hooks overlap
         p.stdin.write(json.dumps({"source": "startup", "cwd": proj, "session_id": "%016x" % (0xb0000000 + i)}).encode("utf-8"))
         p.stdin.close()
+        p.stdin = None   # communicate() would flush the closed pipe: ValueError on POSIX before 3.13
     outs = [p.communicate()[0].decode("utf-8", "replace") for p in procs]
     delivered = {}
     for i in range(files):
