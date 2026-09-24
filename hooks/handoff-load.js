@@ -59,7 +59,7 @@ readStdin(data => {
         // parallel starts otherwise all read "not loaded" (measured 2-6 of 28).
         let unlock = null;
         try { unlock = lockPeaks(); } catch (e) {
-          process.stderr.write('handoff-load: skipping ' + cands[0].n + ': ' + msg(e) + '\n');
+          process.stderr.write('handoff-load: skipping ' + cands[0].n + ': could not record the load (' + msg(e) + ')\n');
           parts.push(S.handoffSkipped(cands[0].n, 'could not record the load: ' + msg(e)));
         }
         const peaks = unlock ? readPeaks() : null;
