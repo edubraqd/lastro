@@ -65,6 +65,11 @@ const S = {
       're-read CLAUDE.md, say in 3 lines what you ' +
       'understand the task to be and recommend /clear. Never silently resume the canary after a gap.',
 
+    // Shown to the user in the approval prompt (WORKFLOW_GATE=ask), not to the model.
+    workflowGate: (name, agents, votes) =>
+      'Workflow "' + name + '" was not asked for in this turn (~' + agents + ' agent() calls in the script' +
+      (votes > 1 ? ', ' + votes + ' votes per item' : '') + '). Approve?',
+
     readCut: (start, end, total, next) =>
       'Read showed lines ' + start + '-' + end + ' of ' + total + ' (automatic cut). ' +
       (total - end) + ' lines remain: Read with offset=' + next + ' if you need the rest.',
@@ -117,6 +122,10 @@ const S = {
       '(objetivo; feito + prova; pendente; arquivos exatos; decisoes; proxima acao segura; comandos), ') +
       'releia o CLAUDE.md, diga em 3 linhas ' +
       'o que entende que e a tarefa e recomende /clear. Nao retome o canario em silencio depois de um buraco.',
+
+    workflowGate: (name, agents, votes) =>
+      'Workflow "' + name + '" sem pedido neste turno (~' + agents + ' chamadas agent() no script' +
+      (votes > 1 ? ', ' + votes + ' votos por item' : '') + '). Aprovar?',
 
     readCut: (start, end, total, next) =>
       'Read mostrou as linhas ' + start + '-' + end + ' de ' + total + ' (corte automatico). Faltam ' +
