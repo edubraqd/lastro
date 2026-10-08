@@ -102,6 +102,25 @@ class HooksTest(unittest.TestCase):
         self.run_hook('context-guard', self.base, {'CONTEXT_LIMIT': '1000', 'ANTHROPIC_BASE_URL': 'http://127.0.0.1:8790'})
         self.assertEqual(self.peaks()[SID]['route'], 'proxy', 'guard tags route=proxy from ANTHROPIC_BASE_URL')
 
+    def test_context_guard_mid_turn(self):
+        # One prompt can run 100+ tool calls; UserPromptSubmit and Stop never see the middle of it.
+        sid = 'beef' + SID[4:]
+        post = {**self.base, 'session_id': sid, 'hook_event_name': 'PostToolUse', 'tool_name': 'Bash'}
+        self.assertIsNone(self.run_hook('context-guard', post, {'CONTEXT_LIMIT': '99999999'}), 'silent below limit')
+        o = self.run_hook('context-guard', post, {'CONTEXT_LIMIT': '1000'})
+        self.assertEqual(o['hookSpecificOutput']['hookEventName'], 'PostToolUse')
+        self.assertIn('MID-TURN', o['hookSpecificOutput']['additionalContext'], 'warns inside the turn (en)')
+        self.assertEqual(self.peaks()[sid]['turns_above'], 0, 'a tool call is not a user turn')
+        self.assertIsNone(self.run_hook('context-guard', post, {'CONTEXT_LIMIT': '1000'}), 'no repeat on every tool call')
+        grown = os.path.join(self.tmp, 'grown.jsonl')
+        call = {'type': 'assistant', 'requestId': 'req_2', 'message': {'id': 'msg_2', 'usage': {
+            'input_tokens': 5, 'cache_creation_input_tokens': 1000, 'cache_read_input_tokens': 359000, 'output_tokens': 50}}}
+        with open(grown, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps(call) + '\n')
+        o = self.run_hook('context-guard', {**post, 'transcript_path': grown}, {'CONTEXT_LIMIT': '1000', 'CONTEXT_LANG': 'pt'})
+        self.assertIn('MEIO DO TURNO', o['hookSpecificOutput']['additionalContext'], 'warns again after +50k (pt)')
+        self.assertEqual(self.peaks()[sid]['peak'], 360005)
+
     def test_batch_eviction(self):
         o = self.run_hook('batch-eviction', self.base, {'EVICTION_LIMIT': '1000'})
         self.assertEqual(o['decision'], 'block')
@@ -596,7 +615,9 @@ class HooksTest(unittest.TestCase):
         d = json.loads(self.run_py('hooks/install.py', '--dry-run').stdout)
         self.assertEqual(set(d['hooks']), {'UserPromptSubmit', 'Stop', 'SessionStart', 'PostToolUse'})
         self.assertEqual(len(d['hooks']['Stop']), 2, 'foreign Stop hook kept, ours added')
-        self.assertEqual(d['hooks']['PostToolUse'][0]['matcher'], 'Read')
+        post = {g['matcher']: g['hooks'][0]['command'] for g in d['hooks']['PostToolUse']}
+        self.assertEqual(set(post), {'Read', '*'})
+        self.assertTrue(post['*'].endswith('/hooks/context-guard.js"'), 'guard also runs after every tool, mid-turn')
         self.assertEqual(d['hooks']['SessionStart'][0]['matcher'], 'startup|clear', 'no node spawn on resume/compact')
         cmd = d['hooks']['SessionStart'][0]['hooks'][0]['command']
         self.assertNotIn('\\', cmd, 'forward slashes: a bare backslash path dies in the shell on Windows')
@@ -614,7 +635,7 @@ class HooksTest(unittest.TestCase):
         with open(settings_path + '.bak', encoding='utf-8') as fh:
             self.assertEqual(json.load(fh), settings, 'the backup is the pre-Lastro file, not overwritten by the second install')
         r = self.run_py('hooks/install.py', '--uninstall')
-        self.assertIn('removed 4 entries', r.stdout)
+        self.assertIn('removed 5 entries', r.stdout)
         self.assertEqual(current()['hooks'], {'Stop': [{'hooks': [{'type': 'command', 'command': 'node other.js'}]}]}, 'uninstall leaves only the foreign hook')
         r = self.run_py('hooks/install.py', '--uninstall')
         self.assertIn('removed 0 entries', r.stdout + r.stderr, 'uninstall with nothing to remove says so')
@@ -632,13 +653,16 @@ class HooksTest(unittest.TestCase):
                 return sorted(json.load(fh).get('hooks', {}))
         self.run_py('hooks/install.py')
         self.assertEqual(events(), ['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'])
+        def post_matchers():
+            with open(settings_path, encoding='utf-8') as fh:
+                return sorted(g.get('matcher') for g in json.load(fh)['hooks']['PostToolUse'])
         self.run_py('hooks/install.py', '--only', 'read-recovery', '--uninstall')
-        self.assertEqual(events(), ['SessionStart', 'Stop', 'UserPromptSubmit'], '--uninstall --only removes just that hook')
+        self.assertEqual(post_matchers(), ['*'], '--uninstall --only removes just that hook (the guard stays on PostToolUse)')
         self.run_py('hooks/install.py', '--only', 'read-recovery')
         self.assertEqual(events(), ['PostToolUse', 'SessionStart', 'Stop', 'UserPromptSubmit'], '--only adds without dropping the others')
         self.run_py('hooks/install.py', '--only', 'read-recovery')
         with open(settings_path, encoding='utf-8') as fh:
-            self.assertEqual(len(json.load(fh)['hooks']['PostToolUse']), 1, '--only is idempotent')
+            self.assertEqual(len(json.load(fh)['hooks']['PostToolUse']), 2, '--only is idempotent')
         r = self.run_py('hooks/install.py', '--only', 'nope', '--uninstall')
         self.assertNotEqual(r.returncode, 0, 'unknown hook name is an error for --uninstall too')
         self.run_py('hooks/install.py', '--uninstall')
@@ -654,7 +678,7 @@ class HooksTest(unittest.TestCase):
         with open(settings_path, encoding='utf-8') as fh:
             self.assertIn('lastro-elsewhere', fh.read())
         r = self.run_py('hooks/install.py', '--uninstall')
-        self.assertIn('removed 4 entries', r.stdout, 'our hooks are recognised by shape, not by the current checkout path')
+        self.assertIn('removed 5 entries', r.stdout, 'our hooks are recognised by shape, not by the current checkout path')
         with open(settings_path, encoding='utf-8') as fh:
             self.assertNotIn('hooks', json.load(fh))
 
@@ -667,7 +691,7 @@ class HooksTest(unittest.TestCase):
             os.remove(settings_path)
         self.run_py('hooks/install.py')
         with open(settings_path, encoding='utf-8') as fh:
-            cmd = json.load(fh)['hooks']['PostToolUse'][0]['hooks'][0]['command']
+            cmd = next(g for g in json.load(fh)['hooks']['PostToolUse'] if g.get('matcher') == 'Read')['hooks'][0]['command']
         f = os.path.join(self.tmp, 'shell.txt')
         with open(f, 'w') as fh:
             fh.write('\n'.join(str(i) for i in range(100)) + '\n')

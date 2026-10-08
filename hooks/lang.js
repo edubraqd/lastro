@@ -14,6 +14,11 @@ const S = {
       'Finish the current task and tell the user to run /clear before the next one. ' +
       'Do not start a new task in this session.',
 
+    guardMid: (ctx, limit) =>
+      'MID-TURN CONTEXT: ~' + ctx + ' tokens are re-sent on every call (limit ' + limit + '). ' +
+      'Finish the step in progress, do not start another, and end the turn: the Stop hook asks for ' +
+      'the handoff (update it if this session already wrote one); then tell the user to run /clear.',
+
     // What a handoff must carry so the next session can act on it without
     // trusting it blindly: proof per item, exact files, one safe next step.
     evict: (ctx, file) =>
@@ -71,6 +76,11 @@ const S = {
       ', pico ' + peak + ', ' + above + ' turnos acima). ' +
       'Feche a tarefa atual e diga ao usuario para rodar /clear antes da proxima. ' +
       'Nao abra tarefa nova nesta sessao.',
+
+    guardMid: (ctx, limit) =>
+      'CONTEXTO NO MEIO DO TURNO: ~' + ctx + ' tokens re-enviados a cada chamada (limite ' + limit + '). ' +
+      'Termine o passo em andamento, nao comece outro e encerre o turno: o hook de parada pede o ' +
+      'handoff (atualize-o se esta sessao ja escreveu um); depois diga ao usuario para rodar /clear.',
 
     evict: (ctx, file) =>
       'Contexto desta sessao esta em ~' + ctx + ' tokens, re-enviados a cada chamada. ' +

@@ -29,7 +29,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOOKS = {
-    "context-guard": ("UserPromptSubmit", None, "Measuring context..."),
+    "context-guard": [("UserPromptSubmit", None, "Measuring context..."), ("PostToolUse", "*", "Measuring context...")],
     "batch-eviction": ("Stop", None, "Checking context for eviction..."),
     "handoff-load": ("SessionStart", "startup|clear", "Loading handoff..."),
     "read-recovery": ("PostToolUse", "Read", "Checking Read cut..."),
@@ -112,12 +112,13 @@ def main():
     if not args.uninstall:
         node = args.node or node_path()
         for name in wanted:
-            event, matcher, status = HOOKS[name]
-            entry = {"type": "command", "command": command_for(name, node), "timeout": 5, "statusMessage": status}
-            group = {"hooks": [entry]}
-            if matcher:
-                group["matcher"] = matcher
-            hooks.setdefault(event, []).append(group)
+            regs = HOOKS[name] if isinstance(HOOKS[name], list) else [HOOKS[name]]
+            for event, matcher, status in regs:
+                entry = {"type": "command", "command": command_for(name, node), "timeout": 5, "statusMessage": status}
+                group = {"hooks": [entry]}
+                if matcher:
+                    group["matcher"] = matcher
+                hooks.setdefault(event, []).append(group)
 
     if not hooks:
         del settings["hooks"]
