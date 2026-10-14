@@ -17,7 +17,7 @@ transcript; they are billed, so they are added to the parent session's totals.
 
 Columns: first-call cache_creation / cache_read (the prefix that was written vs.
 served from a warm cache), totals per session, and the API-equivalent cost split
-at Opus-class list prices (input 1x, cache read 0.1x, 1h cache write 2x, output 5x).
+at each call's list price (MODEL_PRICES in _common.py; ledger.py prices the same way).
 """
 import argparse
 import glob
@@ -27,13 +27,13 @@ import statistics
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import CLAUDE_DIR, PROJECTS  # noqa: E402,F401  (ab-route imports CLAUDE_DIR from here; import also fixes stdout encoding)
+from _common import CLAUDE_DIR, PROJECTS, sheet  # noqa: E402,F401  (ab-route imports CLAUDE_DIR from here; import also fixes stdout encoding)
 
 # A resumed or forked session copies the whole transcript into a new file, so the
 # same API calls appear in two files. This set is shared across every transcript
 # read in one run; process files oldest-first so the original keeps its calls
 # and the copy only counts what it added.
-GLOBAL_SEEN = set()
+GLOBAL_SEEN = {}
 
 
 def ctx(c):
@@ -48,7 +48,8 @@ def rewrote(cache_creation, prev_ctx):
 
 
 def iter_calls(path, seen=None, side=False):
-    """Yield one dict per API call (deduplicated) from a transcript. side=True marks every call as subagent."""
+    """Yield one dict per API call (deduplicated) from a transcript. side=True marks every call as subagent.
+    A call's output is final only once the file is read: later lines of the same call raise it in place."""
     if seen is None:
         seen = GLOBAL_SEEN
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -67,9 +68,11 @@ def iter_calls(path, seen=None, side=False):
                 continue
             key = (m.get("id"), d.get("requestId"))
             if key in seen:
+                # a later line of the same call: output_tokens grows while the response streams
+                seen[key]["output"] = max(seen[key]["output"], u.get("output_tokens") or 0)
                 continue
-            seen.add(key)
-            yield {
+            cc = u.get("cache_creation") or {}
+            seen[key] = {
                 "ts": d.get("timestamp", ""),
                 "model": m.get("model", ""),
                 "version": d.get("version", ""),
@@ -78,9 +81,11 @@ def iter_calls(path, seen=None, side=False):
                 "cache_creation": u.get("cache_creation_input_tokens") or 0,
                 "cache_read": u.get("cache_read_input_tokens") or 0,
                 "output": u.get("output_tokens") or 0,
+                "cache_creation_5m": cc.get("ephemeral_5m_input_tokens") or 0,
                 # subagent call (isSidechain here, or any line of a subagents/ file): not consecutive with the main thread
                 "side": side or bool(d.get("isSidechain")),
             }
+            yield seen[key]
 
 
 def first_prompt(path):
@@ -133,6 +138,10 @@ def summarize(path, min_calls, subagents=True):
     if len(calls) < min_calls or not calls:
         return None
     tot = {k: sum(c[k] for c in calls) for k in ("input", "cache_creation", "cache_read", "output")}
+    usd = {k: 0.0 for k in tot}
+    for c in calls:
+        for k, v in cost(c).items():
+            usd[k] += v
     c0 = calls[0]
     return {
         "session": os.path.basename(path)[:-6],
@@ -147,17 +156,18 @@ def summarize(path, min_calls, subagents=True):
         "context_median": int(statistics.median(ctx(c) for c in ([c for c in calls if not c["side"]] or calls))),
         "prompt": first_prompt(path).replace("\n", " "),
         **tot,
+        "usd": {k: round(v, 4) for k, v in usd.items()},
     }
 
 
-def cost(t):
-    """API-equivalent dollars at $5/M input, Opus-class multipliers."""
-    per_m = 5.0
+def cost(c):
+    """API-equivalent dollars of one call at its model's list price (5m part of the write at the 5m rate)."""
+    p = sheet(c["model"], ctx(c))
     return {
-        "cache_read": t["cache_read"] * 0.1 * per_m / 1e6,
-        "cache_creation": t["cache_creation"] * 2.0 * per_m / 1e6,
-        "output": t["output"] * 5.0 * per_m / 1e6,
-        "input": t["input"] * per_m / 1e6,
+        "cache_read": c["cache_read"] * p["cr"],
+        "cache_creation": c["cache_creation_5m"] * p["cw5m"] + (c["cache_creation"] - c["cache_creation_5m"]) * p["cw1h"],
+        "output": c["output"] * p["out"],
+        "input": c["input"] * p["input"],
     }
 
 
@@ -189,13 +199,13 @@ def main():
               f"{r['context_median']:8,} {r['cache_read']:12,} {r['cache_creation']:10,} {r['output']:8,}  {r['prompt'][:50]!r}")
 
     tot = {k: sum(r[k] for r in rows) for k in ("input", "cache_creation", "cache_read", "output")}
-    c = cost(tot)
+    c = {k: sum(r["usd"][k] for r in rows) for k in tot}
     total_cost = sum(c.values()) or 1
     print(f"\nsessions {len(rows)}; calls {sum(r['calls'] for r in rows):,}")
     print(f"first call: cache_creation median {int(statistics.median(r['first_cache_creation'] for r in rows)):,}; "
           f"cache_read median {int(statistics.median(r['first_cache_read'] for r in rows)):,}; "
           f"cold starts (cache_read=0): {sum(1 for r in rows if r['first_cache_read'] == 0)}/{len(rows)}")
-    print("API-equivalent cost share (Opus list prices):")
+    print("API-equivalent cost share (list price of each call's model):")
     for k in ("cache_read", "cache_creation", "output", "input"):
         print(f"  {k:15} {tot[k]:15,} tok  ${c[k]:8.2f}  {100 * c[k] / total_cost:3.0f}%")
 

@@ -42,7 +42,7 @@ for path in glob.glob(os.path.join(CLAUDE_DIR, "projects", "*", "*.jsonl")):
     if not route:
         continue
     calls = [(c["input"] + c["cache_read"] + c["cache_creation"], c["cache_read"], c["output"])
-             for c in iter_calls(path, seen=set())]
+             for c in list(iter_calls(path, seen={}))]   # list first: later lines raise output in place
     if calls:
         groups.setdefault(route, []).append((sid, calls))
 

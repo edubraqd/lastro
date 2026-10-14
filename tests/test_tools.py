@@ -48,7 +48,7 @@ class ToolsTest(unittest.TestCase):
 
     def test_iter_calls_dedups_one_line_per_content_block(self):
         import sessions
-        calls = list(sessions.iter_calls(self.s1, seen=set()))
+        calls = list(sessions.iter_calls(self.s1, seen={}))
         with open(self.s1, encoding="utf-8") as fh:
             usage_lines = sum(1 for l in fh if '"usage"' in l)
         self.assertEqual(usage_lines, 2 * len(fixture.S1_CALLS))
@@ -57,7 +57,7 @@ class ToolsTest(unittest.TestCase):
 
     def test_iter_calls_keeps_call_fields(self):
         import sessions
-        c0 = next(sessions.iter_calls(self.s1, seen=set()))
+        c0 = next(sessions.iter_calls(self.s1, seen={}))
         self.assertEqual(c0["model"], fixture.MODEL)
         self.assertEqual(c0["version"], fixture.VERSION)
         self.assertEqual(c0["cache_read"], 0)
@@ -134,7 +134,8 @@ class ToolsTest(unittest.TestCase):
 
     def test_cost_uses_opus_multipliers(self):
         import sessions
-        c = sessions.cost({"input": 10**6, "cache_creation": 10**6, "cache_read": 10**6, "output": 10**6})
+        c = sessions.cost({"model": fixture.MODEL, "input": 10**6, "cache_creation": 10**6, "cache_creation_5m": 0,
+                           "cache_read": 10**6, "output": 10**6})
         self.assertAlmostEqual(c["input"], 5.0)
         self.assertAlmostEqual(c["cache_read"], 0.5)
         self.assertAlmostEqual(c["cache_creation"], 10.0)
@@ -191,7 +192,7 @@ class ToolsTest(unittest.TestCase):
         """The TTL buckets (cw5m/cw1h) are read by ledger.load, which has its own loader; nothing
         downstream of iter_calls uses them, so it does not carry them."""
         import sessions
-        calls = list(sessions.iter_calls(self.s3, seen=set()))
+        calls = list(sessions.iter_calls(self.s3, seen={}))
         self.assertEqual([c["side"] for c in calls], [False] * 3 + [True] * 3 + [False])
         self.assertEqual({k for k in calls[0] if k.startswith("cw")}, set())
 
@@ -320,6 +321,65 @@ class ToolsTest(unittest.TestCase):
         P = 5.0 / 1e6
         self.assertEqual(ledger.prices(5.0), {"input": P, "cr": 0.1 * P, "cw1h": 2.0 * P, "cw5m": 1.25 * P, "out": 5.0 * P})
 
+    def test_price_sheet_by_model(self):
+        """Per-model list prices (US$/M): the read multiplier is 0.05x on Opus/Sonnet 5.5, 0.025x on Fable 5.1."""
+        import ledger
+        M = 1e6
+        self.assertEqual(ledger.sheet("claude-opus-5-5"),
+                         {"input": 4 / M, "cw5m": 5 / M, "cw1h": 8 / M, "cr": 0.20 / M, "out": 20 / M})
+        self.assertEqual(ledger.sheet("claude-opus-5")["cr"], 0.5 / M)
+        self.assertEqual(ledger.sheet("claude-sonnet-5-5")["cr"], 0.10 / M)
+        self.assertEqual(ledger.sheet("claude-sonnet-5")["cr"], 0.20 / M)
+        self.assertEqual(ledger.sheet("claude-fable-5-1")["cr"], 0.25 / M)
+        self.assertEqual(ledger.sheet("claude-fable-5")["cr"], 1.0 / M)
+        self.assertEqual(ledger.sheet("claude-haiku-5-5")["out"], 0.5 / M)
+        self.assertEqual(ledger.sheet("claude-haiku-5-5", 100001)["out"], 2.5 / M)   # x5 above a 100k prompt
+        self.assertEqual(ledger.sheet("<synthetic>"), ledger.sheet("claude-opus-5"))
+
+    def _write(self, rows, name="s5"):
+        """One transcript from (requestId, message.id, model, ts, usage, content) rows; returns (cfg, path)."""
+        tmp = tempfile.mkdtemp(prefix="ccf-%s-" % name)
+        self.addCleanup(shutil.rmtree, tmp, True)
+        proj = os.path.join(tmp, "claude", "projects", "D--proj-p")
+        os.makedirs(proj)
+        path = os.path.join(proj, name + ".jsonl")
+        with open(path, "w", encoding="utf-8") as fh:
+            for rid, mid, model, t, usage, content in rows:
+                fh.write(json.dumps({"type": "assistant", "requestId": rid, "timestamp": t, "version": "2.1.295",
+                                     "message": {"id": mid, "model": model, "content": content, "usage": usage}}) + "\n")
+        return os.path.join(tmp, "claude"), path
+
+    def test_ledger_prices_each_call_at_its_model(self):
+        u = {"input_tokens": 10, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 100000,
+             "output_tokens": 500, "cache_creation": {"ephemeral_1h_input_tokens": 1000}}
+        cfg, _ = self._write([("r0", "m0", "claude-opus-5-5", "2026-10-12T10:00:00.000Z", u, []),
+                              ("r1", "m1", "claude-sonnet-5-5", "2026-10-12T10:01:00.000Z", u, [])])
+        r = run_tool("ledger.py", "--min-calls", "1", "--json", cfg=cfg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        want = (10 * 4 + 1000 * 8 + 100000 * 0.20 + 500 * 20 + 10 * 2 + 1000 * 4 + 100000 * 0.10 + 500 * 10) / 1e6
+        self.assertAlmostEqual(json.loads(r.stdout)["total_usd"], want, places=9)
+        r = run_tool("before_after.py", "--split", "2026-10-13", "--min-calls", "1", "--json", cfg=cfg)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertAlmostEqual(json.loads(r.stdout)["before"]["usd"], round(want, 2), places=2)
+
+    def test_dedup_keeps_largest_output_and_any_tool_use(self):
+        """Streaming writes one line per block; the first (often thinking) carries a partial output_tokens."""
+        u1 = {"input_tokens": 5, "cache_creation_input_tokens": 30000, "cache_read_input_tokens": 0, "output_tokens": 3}
+        u2 = dict(u1, output_tokens=400)
+        cfg, path = self._write([
+            ("r0", "m0", fixture.MODEL, "2026-10-12T10:00:00.000Z", u1, [{"type": "thinking", "thinking": ""}]),
+            ("r0", "m0", fixture.MODEL, "2026-10-12T10:00:01.000Z", u2, [{"type": "tool_use", "id": "t", "name": "Read", "input": {}}]),
+        ])
+        import ledger, sessions
+        calls = ledger.load(path, {})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["out"], 400)
+        self.assertTrue(calls[0]["tool_turn"])
+        calls = list(sessions.iter_calls(path, seen={}))
+        self.assertEqual([c["output"] for c in calls], [400])
+        r = run_tool("ledger.py", "--min-calls", "1", "--json", cfg=cfg)
+        self.assertEqual(json.loads(r.stdout)["tokens"]["out"], 400)
+
     # --- before_after.py ---------------------------------------------------
 
     def test_before_after_splits_by_first_call_day(self):
@@ -399,7 +459,7 @@ class ToolsTest(unittest.TestCase):
         r = run_tool("ab-route.py", "--since", "2026-09-01", cfg=self.cfg)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertRegex(r.stdout, r"(?m)^direct\s+1\s+%d\b" % len(fixture.S1_CALLS))
-        # seen=set() per file: the resume copy s2 counts all of s1's calls plus its own
+        # seen={} per file: the resume copy s2 counts all of s1's calls plus its own
         self.assertRegex(r.stdout, r"(?m)^proxy\s+1\s+%d\b" % (len(fixture.S1_CALLS) + 1))
         r = run_tool("ab-route.py", "--since", "2026-09-15", cfg=self.cfg)   # both arms older than --since
         self.assertEqual(r.returncode, 0, r.stderr)

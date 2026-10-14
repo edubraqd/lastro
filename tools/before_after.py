@@ -25,21 +25,22 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from ledger import load, prices  # noqa: E402
+from ledger import call_price, call_usd, load, prices  # noqa: E402,F401  (tests check prices is ledger.prices)
 from sessions import transcripts  # noqa: E402
 from _common import ts  # noqa: E402
 
 
 def new_bucket():
     return {"sessions": 0, "calls": 0, "usd": 0.0, "cr": 0, "cw": 0, "out": 0, "ctx": [], "over": 0,
-            "ttl": 0, "ttl_tok": 0, "first_cw": [], "days": set(), "peak": [], "compact": 0, "sess_calls": []}
+            "usd_cr": 0.0, "usd_cw": 0.0, "usd_out": 0.0, "ttl_usd": 0.0, "ttl": 0, "ttl_tok": 0, "first_cw": [], "days": set(), "peak": [], "compact": 0, "sess_calls": []}
 
 
 def p90(xs):
     return sorted(xs)[int(len(xs) * 0.9)] if xs else 0
 
 
-def add_session(b, calls, price, cap):
+def add_session(b, calls, flat, cap):
+    """flat: one price sheet for every call (--price-input), or None for each call's own model."""
     b["sessions"] += 1
     b["days"].add(calls[0]["ts"][:10])
     b["sess_calls"].append(len(calls))
@@ -49,7 +50,11 @@ def add_session(b, calls, price, cap):
     peak = 0
     for c in calls:
         b["calls"] += 1
-        b["usd"] += c["input"] * price["input"] + c["cr"] * price["cr"] + c["cw"] * price["cw1h"] + c["out"] * price["out"]
+        u = call_usd(c, flat or call_price(c))
+        b["usd"] += sum(u.values())
+        b["usd_cr"] += u["cache_read"]
+        b["usd_cw"] += u["cache_creation"]
+        b["usd_out"] += u["output"]
         b["cr"] += c["cr"]
         b["cw"] += c["cw"]
         b["out"] += c["out"]
@@ -72,11 +77,12 @@ def add_session(b, calls, price, cap):
         if c["cw"] > 0.2 * pctx and c["cw"] > 20000 and gap > 60:   # same definition as ledger.py / ttl.py
             b["ttl"] += 1
             b["ttl_tok"] += c["cw"]
+            b["ttl_usd"] += c["cw"] * (flat or call_price(c))["cw1h"]
         if cctx < 0.7 * pctx and pctx > 100000:                      # history shrank: compact or prune
             b["compact"] += 1
 
 
-def row(b, price, cap):
+def row(b, cap):
     days = max(len(b["days"]), 1)
     return {
         "days": len(b["days"]), "sessions": b["sessions"], "calls": b["calls"],
@@ -86,15 +92,15 @@ def row(b, price, cap):
         "ctx_p90": int(p90(b["ctx"])),
         "over_cap_pct": round(100 * b["over"] / len(b["ctx"]), 1) if b["ctx"] else 0,
         "peak_median": int(statistics.median(b["peak"])) if b["peak"] else 0,
-        "ttl_events": b["ttl"], "ttl_usd": round(b["ttl_tok"] * price["cw1h"], 2),
+        "ttl_events": b["ttl"], "ttl_usd": round(b["ttl_usd"], 2),
         "first_cw_median": int(statistics.median(b["first_cw"])) if b["first_cw"] else 0,
         "out_per_call": round(b["out"] / b["calls"], 1) if b["calls"] else 0,
         "compact": b["compact"],
         "calls_per_session_median": int(statistics.median(b["sess_calls"])) if b["sess_calls"] else 0,
         "share": {
-            "cache_read": round(100 * b["cr"] * price["cr"] / b["usd"], 1) if b["usd"] else 0,
-            "cache_write": round(100 * b["cw"] * price["cw1h"] / b["usd"], 1) if b["usd"] else 0,
-            "output": round(100 * b["out"] * price["out"] / b["usd"], 1) if b["usd"] else 0,
+            "cache_read": round(100 * b["usd_cr"] / b["usd"], 1) if b["usd"] else 0,
+            "cache_write": round(100 * b["usd_cw"] / b["usd"], 1) if b["usd"] else 0,
+            "output": round(100 * b["usd_out"] / b["usd"], 1) if b["usd"] else 0,
         },
     }
 
@@ -122,7 +128,8 @@ def main():
     ap.add_argument("--project")
     ap.add_argument("--min-calls", type=int, default=5)
     ap.add_argument("--cap", type=int, default=200000)
-    ap.add_argument("--price-input", type=float, default=5.0, help="US$ per M input tokens (Opus-class: 5)")
+    ap.add_argument("--price-input", type=float, default=None,
+                    help="flat US$ per M input tokens for every call (default: each call's model list price)")
     ap.add_argument("--daily", action="store_true", help="also one row per day")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -130,9 +137,9 @@ def main():
     split = dt.date.fromisoformat(args.split)
     lo = (split - dt.timedelta(days=args.days)).isoformat() if args.days else "0000"
     hi = (split + dt.timedelta(days=args.days)).isoformat() if args.days else "9999"
-    price = prices(args.price_input)
+    price = prices(args.price_input) if args.price_input else None
 
-    seen = set()
+    seen = {}
     periods = {"before": new_bucket(), "after": new_bucket()}
     daily = defaultdict(new_bucket)
     for path in transcripts(args.project, 0):
@@ -147,9 +154,9 @@ def main():
             add_session(daily[day], calls, price, args.cap)
 
     out = {"split": args.split, "window_days": args.days, "cap": args.cap,
-           "before": row(periods["before"], price, args.cap), "after": row(periods["after"], price, args.cap)}
+           "before": row(periods["before"], args.cap), "after": row(periods["after"], args.cap)}
     if args.daily:
-        out["daily"] = {d: row(daily[d], price, args.cap) for d in sorted(daily)}
+        out["daily"] = {d: row(daily[d], args.cap) for d in sorted(daily)}
     b, a = out["before"], out["after"]
     if b["calls"] and a["calls"]:
         out["delta"] = {key: round(100 * (a[key] - b[key]) / b[key], 1) if b[key] else None

@@ -16,15 +16,16 @@ sys.path.insert(0, HERE)
 import fixture  # noqa: E402
 from test_tools import run_tool  # noqa: E402
 
-# US$/M input by family; 5m write 1.25x, 1h write 2x, read 0.1x, output 5x
-P = {fixture.MODEL: 5.0, "claude-sonnet-5": 3.0, "claude-haiku-4-5-20251001": 1.0}
+# list price, US$/M: input, 5m write, 1h write, read, output (Sonnet 5 is $2 input, not $3)
+P = {fixture.MODEL: (5, 6.25, 10, 0.5, 25), "claude-sonnet-5": (2, 2.5, 4, 0.20, 10),
+     "claude-haiku-4-5-20251001": (1, 1.25, 2, 0.10, 5)}
 
 
 def usd(calls, side, flat=None):
     tot = 0.0
     for (_, model, inp, cw, cr, out) in calls:
-        p = (flat or P[model]) / 1e6
-        tot += inp * p + cw * (1.25 if side else 2.0) * p + cr * 0.1 * p + out * 5 * p
+        i, w5, w1, r, o = (flat, 1.25 * flat, 2 * flat, 0.1 * flat, 5 * flat) if flat else P[model]
+        tot += (inp * i + cw * (w5 if side else w1) + cr * r + out * o) / 1e6
     return tot
 
 

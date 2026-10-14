@@ -180,7 +180,19 @@ event and the two outlier sessions of the next paragraph:
 | no hook — 2.1.237 and later | 32,962 | 19 | 0.06% |
 
 20× overall, 13× on current versions, spread over 10+ sessions (0–28% per
-session). Mechanism unknown: the injected text is an attachment to the user
+session).
+
+> **Correction (2026-10-13).** The table above is inflated by a loader bug: a
+> call was a tool turn only if its *first* transcript line held the
+> `tool_use`, and the first line is `thinking` in 57% of responses, so 62% of
+> tool turns were counted as user turns (where the no-hook denominator grew).
+> Fixed in `ledger.load` (any line counts). Same base, re-run
+> (`ledger.py --until 2026-09-15 --no-subagents --price-input 5`, last block):
+> hook 0.89% vs no hook 0.55% on ≥ 2.1.237 (**1.6×**, n = 12 and 13
+> re-writes), 13.3% vs 5.5% on older versions (2.4×), 3.8× pooled. On every
+> log to 2026-10-13, current versions: 0.46% vs 0.34% (1.35×). The
+> correlation is weak on current clients; the 20×/13× below should not be
+> quoted. Mechanism unknown: the injected text is an attachment to the user
 message and should sit after the cached history; yet ~1 user turn in 120 on
 current versions re-writes the whole prefix when a hook has spoken. If you run
 `UserPromptSubmit` hooks that return `additionalContext` (this repo's

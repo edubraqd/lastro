@@ -36,7 +36,7 @@ def main():
     ap.add_argument("--min-calls", type=int, default=5)
     args = ap.parse_args()
 
-    seen = set()
+    seen = {}
     n_all = Counter(); n_broke = Counter()          # keyed by feature / version / band / turn kind
     unexplained = []
     for path in transcripts(args.project, args.last):

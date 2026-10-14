@@ -18,13 +18,18 @@ Subagent transcripts (<session>/subagents/**/agent-*.jsonl) are counted by
 default as side calls of their parent session; the total is printed split into
 main thread and subagents. --no-subagents reads the parent transcripts only.
 
-Prices: input P, cache read 0.1 P, 1h cache write 2 P, 5m cache write 1.25 P,
-output 5 P (Anthropic price sheet multipliers). P comes from each call's
-message.model (opus 5, sonnet 3, haiku 1, anything else 5); --price-input sets
-one flat P for every call. Writes with no TTL breakdown are priced as 1h.
-The levers below the total are priced at the flat P (default 5, Opus-class).
-The multipliers were confirmed by regression on Claude Code's own
-`total_cost_usd` (experiments/ab-config-vs-bare, residual 0).
+Prices: each call at the list price of its own message.model (MODEL_PRICES in
+_common.py: input, 5m write, 1h write, cache read, output). Reads are 0.1x
+input on Opus 5, 0.05x on Opus/Sonnet 5.5, 0.025x on Fable 5.1, so the levers
+below the total are priced per call too. Writes with no TTL breakdown are
+priced as 1h. --price-input P sets one flat sheet for every call (input P,
+read 0.1 P, 1h write 2 P, 5m write 1.25 P, output 5 P): the Opus 5 multipliers
+confirmed by regression on Claude Code's own `total_cost_usd`
+(experiments/ab-config-vs-bare, residual 0), and the SAVINGS.md base.
+
+Dedup: one assistant line per content block, same (message.id, requestId).
+The call keeps the largest output_tokens of its lines (the first line is
+written mid-stream) and counts as a tool turn if any line holds a tool_use.
 
 If you are on a subscription, the dollars are quota-equivalent, not cash.
 """
@@ -37,7 +42,7 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sessions import subagent_files, transcripts  # noqa: E402
-from _common import PROJECTS, ts  # noqa: E402
+from _common import PROJECTS, prices, sheet, ts  # noqa: E402,F401  (before_after imports prices from here)
 
 SKIP = {"assistant", "user", "queue-operation", "last-prompt"}
 # events that change the request prefix by construction (tools, system prompt, params); shared with rewrites.py
@@ -49,20 +54,18 @@ PREFIX_EVENTS = {
     "permission-mode", "attachment:date_change",
 }
 
-
-def prices(per_m_input):
-    """US$ per token: input P, cache read 0.1 P, 1h write 2 P, 5m write 1.25 P, output 5 P."""
-    P = per_m_input / 1e6
-    return {"input": P, "cr": 0.1 * P, "cw1h": 2.0 * P, "cw5m": 1.25 * P, "out": 5.0 * P}
-
-
-# US$ per M input tokens by model family (substring of message.model); anything else pays DEFAULT_P
-MODEL_P = (("opus", 5.0), ("sonnet", 3.0), ("haiku", 1.0))
-DEFAULT_P = 5.0
+LEVERS = ("ttl", "ttl-keepalive-net (blind pinger)", "ttl-keepalive-net (only when back in time)", "resume-or-model-switch",
+          "effort-change", "other-prefix-change (tools/MCP/skills)", "hook-context-on-user-turn (correlation)",
+          "unexplained (old client versions)", "history-cap", "skillOverrides", "terse-output -8%")
 
 
 def per_m_input(model):
-    return next((p for fam, p in MODEL_P if fam in (model or "")), DEFAULT_P)
+    return sheet(model)["input"] * 1e6
+
+
+def call_price(c):
+    """The list-price sheet of one call: its own model, and its own prompt size (Haiku 5.5 long context)."""
+    return sheet(c["model"], c["input"] + c["cw"] + c["cr"])
 
 
 def call_usd(c, price):
@@ -73,7 +76,8 @@ def call_usd(c, price):
 
 
 def load(path, seen, side=False):
-    """One list of calls (dedup) with the transcript events that sit between them. side=True: a subagent file."""
+    """One list of calls (dedup) with the transcript events that sit between them. side=True: a subagent file.
+    seen: dict (message.id, requestId) -> call, shared across files so a resumed copy only adds what is new."""
     lines = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for raw in f:
@@ -91,19 +95,24 @@ def load(path, seen, side=False):
             if not u:
                 continue
             key = (m.get("id"), d.get("requestId"))
+            tool_use = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in (m.get("content") or []))
             if key in seen:
+                # one line per content block; output_tokens grows as the response streams, tool_use is
+                # rarely the first block (thinking is, in 57% of responses)
+                c = seen[key]
+                c["out"] = max(c["out"], u.get("output_tokens") or 0)
+                c["tool_turn"] = c["tool_turn"] or tool_use
                 continue
-            seen.add(key)
             cc = u.get("cache_creation") or {}
-            calls.append({
+            seen[key] = {
                 "ts": d.get("timestamp", ""), "model": m.get("model", ""), "version": d.get("version", ""),
                 "side": side or bool(d.get("isSidechain")),
                 "input": u.get("input_tokens") or 0, "cw": u.get("cache_creation_input_tokens") or 0,
                 "cr": u.get("cache_read_input_tokens") or 0, "out": u.get("output_tokens") or 0,
                 "cw5m": cc.get("ephemeral_5m_input_tokens") or 0, "cw1h": cc.get("ephemeral_1h_input_tokens") or 0,
-                "events": pending, "tool_turn": any(isinstance(b, dict) and b.get("type") == "tool_use"
-                                                   for b in (m.get("content") or [])),
-            })
+                "events": pending, "tool_turn": tool_use,
+            }
+            calls.append(seen[key])
             pending = set()
         elif t not in SKIP:
             pending.add(t)
@@ -130,9 +139,12 @@ def main():
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    price = prices(args.price_input or DEFAULT_P)
+    flat = prices(args.price_input) if args.price_input else None
 
-    seen = set()
+    def pr(c):
+        return flat or call_price(c)
+
+    seen = {}
     tot = Counter()
     usd = Counter()
     usd_who = Counter()             # main / side
@@ -147,6 +159,7 @@ def main():
     hook_tokens = Counter()
     ttl_gaps = Counter()
     ttl_gap_tokens = Counter()
+    ttl_gap_usd = Counter()
 
     for path in transcripts(args.project, args.last):
         calls = load(path, seen)
@@ -161,7 +174,8 @@ def main():
         for c in calls:
             for k in ("input", "cw", "cr", "out"):
                 tot[k] += c[k]
-            cu = call_usd(c, price if args.price_input else prices(per_m_input(c["model"])))
+            cu = call_usd(c, pr(c))
+            ledger["terse-output -8%"]["usd"] += 0.08 * c["out"] * pr(c)["out"]
             usd.update(cu)
             usd_who["side" if c["side"] else "main"] += sum(cu.values())
             usd_model[c["model"] or "?"] += sum(cu.values())
@@ -171,9 +185,11 @@ def main():
             if not c["side"]:
                 ctx = c["input"] + c["cw"] + c["cr"]
                 ctx_main.append(ctx)
+                ledger["skillOverrides"]["usd"] += args.skill_tokens * pr(c)["cr"]
                 if ctx > args.cap:
                     ledger["history-cap"]["events"] += 1
                     ledger["history-cap"]["tokens"] += ctx - args.cap
+                    ledger["history-cap"]["usd"] += (ctx - args.cap) * pr(c)["cr"]
         main = [c for c in calls if not c["side"]]
         for j in range(1, len(main)):
             p, c = main[j - 1], main[j]
@@ -187,30 +203,34 @@ def main():
             broke = c["cw"] > 0.2 * pctx and c["cw"] > 20000
             # keep-alive counterfactual. A blind pinger fires every `ping_every` idle minutes on EVERY
             # gap (whether or not the cache would have broken), up to `max_pings`, each ping a cache
-            # read of the previous context (0.1x). It only earns something on a TTL break it reached.
+            # read of the previous context. It only earns something on a TTL break it reached.
             pings = min(int(gap // args.ping_every), args.max_pings)
             if pings:
-                ledger["ttl-keepalive-net (blind pinger)"]["usd"] -= pings * pctx * price["cr"]
+                ledger["ttl-keepalive-net (blind pinger)"]["usd"] -= pings * pctx * pr(p)["cr"]
             if not broke:
                 continue
+            rewrite_usd = c["cw"] * pr(c)["cw1h"]
             if gap > 60:
                 ledger["ttl"]["events"] += 1
                 ledger["ttl"]["tokens"] += c["cw"]
                 gb = "60-120 min" if gap <= 120 else "120-200 min" if gap <= 200 else "200-480 min" if gap <= 480 else "> 480 min"
                 ttl_gaps[gb] += 1
                 ttl_gap_tokens[gb] += c["cw"]
+                ttl_gap_usd[gb] += rewrite_usd
+                ledger["ttl"]["usd"] += rewrite_usd
                 if gap // args.ping_every <= args.max_pings:
-                    gross = c["cw"] * price["cw1h"]
+                    gross = rewrite_usd
                     ledger["ttl-keepalive-net (blind pinger)"]["events"] += 1
                     ledger["ttl-keepalive-net (blind pinger)"]["tokens"] += c["cw"]
                     ledger["ttl-keepalive-net (blind pinger)"]["usd"] += gross
                     ledger["ttl-keepalive-net (only when back in time)"]["events"] += 1
                     ledger["ttl-keepalive-net (only when back in time)"]["tokens"] += c["cw"]
-                    ledger["ttl-keepalive-net (only when back in time)"]["usd"] += gross - pings * pctx * price["cr"]
+                    ledger["ttl-keepalive-net (only when back in time)"]["usd"] += gross - pings * pctx * pr(p)["cr"]
                 continue
             if "synthetic" in p["model"] or (p["model"] and c["model"] and p["model"] != c["model"]):
                 ledger["resume-or-model-switch"]["events"] += 1
                 ledger["resume-or-model-switch"]["tokens"] += c["cw"]
+                ledger["resume-or-model-switch"]["usd"] += rewrite_usd
                 continue
             if cctx < 0.7 * pctx:
                 continue  # prune/compact: the history really shrank, nothing to avoid
@@ -218,15 +238,19 @@ def main():
             if "attachment:ultra_effort_enter" in ev:
                 ledger["effort-change"]["events"] += 1
                 ledger["effort-change"]["tokens"] += c["cw"]
+                ledger["effort-change"]["usd"] += rewrite_usd
             elif ev & PREFIX_EVENTS:
                 ledger["other-prefix-change (tools/MCP/skills)"]["events"] += 1
                 ledger["other-prefix-change (tools/MCP/skills)"]["tokens"] += c["cw"]
+                ledger["other-prefix-change (tools/MCP/skills)"]["usd"] += rewrite_usd
             elif "attachment:hook_additional_context" in ev and not p["tool_turn"]:
                 ledger["hook-context-on-user-turn (correlation)"]["events"] += 1
                 ledger["hook-context-on-user-turn (correlation)"]["tokens"] += c["cw"]
+                ledger["hook-context-on-user-turn (correlation)"]["usd"] += rewrite_usd
             else:
                 ledger["unexplained (old client versions)"]["events"] += 1
                 ledger["unexplained (old client versions)"]["tokens"] += c["cw"]
+                ledger["unexplained (old client versions)"]["usd"] += rewrite_usd
                 ledger["unexplained (old client versions)"][c["version"]] += 1
         # hook correlation on user-turn boundaries, no known prefix event, no gap, same model
         for j in range(1, len(main)):
@@ -246,17 +270,13 @@ def main():
                 hook_broke[key] += 1
                 hook_tokens[key] += c["cw"]
 
-    for k in ("ttl", "resume-or-model-switch", "effort-change", "other-prefix-change (tools/MCP/skills)",
-              "hook-context-on-user-turn (correlation)", "unexplained (old client versions)"):
-        ledger[k]["usd"] = ledger[k]["tokens"] * price["cw1h"]
-    ledger["history-cap"]["usd"] = ledger["history-cap"]["tokens"] * price["cr"]
     n_main_calls = len(ctx_main)
     ledger["skillOverrides"]["events"] = n_main_calls
     ledger["skillOverrides"]["tokens"] = args.skill_tokens * n_main_calls
-    ledger["skillOverrides"]["usd"] = ledger["skillOverrides"]["tokens"] * price["cr"]
     ledger["terse-output -8%"]["tokens"] = int(0.08 * tot["out"])
-    ledger["terse-output -8%"]["usd"] = ledger["terse-output -8%"]["tokens"] * price["out"]
 
+    for k in LEVERS:
+        ledger[k]   # every lever in the JSON, even with no events
     usd = {k: usd[k] for k in ("cache_read", "cache_creation", "output", "input")}
     total = sum(usd.values())
 
@@ -290,22 +310,19 @@ def main():
         print(f"  {who:5} {b:3} {v:15,}")
     print("\nledger — what each lever touches on these logs (API-equivalent, ceiling unless marked net):")
     print(f"  {'lever':46} {'events':>8} {'tokens':>16} {'US$':>11} {'% of total':>10}")
-    order = ["ttl", "ttl-keepalive-net (blind pinger)", "ttl-keepalive-net (only when back in time)", "resume-or-model-switch", "effort-change",
-             "other-prefix-change (tools/MCP/skills)", "hook-context-on-user-turn (correlation)",
-             "unexplained (old client versions)", "history-cap", "skillOverrides", "terse-output -8%"]
-    for k in order:
+    for k in LEVERS:
         v = ledger[k]
         print(f"  {k:46} {v['events']:8,} {v['tokens']:16,} {v['usd']:11,.2f} {100 * v['usd'] / total:9.2f}%")
     print(f"\n  ttl: rewrites after an idle gap > 60 min, priced at 2x (1h write). Avoidable by keep-alive or by")
-    print(f"       handoff + /clear before leaving; the 'net' line subtracts {args.ping_every}-min pings (0.1x of the")
-    print(f"       previous context each) and charges {args.max_pings} wasted pings when the gap outlived the pinger.")
-    print(f"  history-cap: cache_read above {args.cap:,} per call, at 0.1x. Arithmetic ceiling of 'never let a")
+    print(f"       handoff + /clear before leaving; the 'net' line subtracts {args.ping_every}-min pings (a cache read")
+    print(f"       of the previous context each) and charges {args.max_pings} wasted pings when the gap outlived the pinger.")
+    print(f"  history-cap: cache_read above {args.cap:,} per call, at read price. Arithmetic ceiling of 'never let a")
     print(f"       session grow past the cap'; NOT a forecast — the work would need more sessions and re-reads.")
     print(f"  skillOverrides: {args.skill_tokens:,} prefix tokens x every main call at 0.1x (measured delta).")
     print(f"  terse-output: 8% of output tokens (measured on Haiku pt-BR, n=20, sd 25%).")
     print("\nttl re-writes by idle gap (how long the session sat before it came back):")
     for gb in ("60-120 min", "120-200 min", "200-480 min", "> 480 min"):
-        print(f"  {gb:12} events {ttl_gaps[gb]:5,}  tokens {ttl_gap_tokens[gb]:13,}  ${ttl_gap_tokens[gb] * price['cw1h']:9,.2f}")
+        print(f"  {gb:12} events {ttl_gaps[gb]:5,}  tokens {ttl_gap_tokens[gb]:13,}  ${ttl_gap_usd[gb]:9,.2f}")
     print("\nhook additionalContext on user-turn boundaries (no other prefix event, same model, gap <= 60 min):")
     for key in sorted(hook_turns):
         n, b, t = hook_turns[key], hook_broke[key], hook_tokens[key]

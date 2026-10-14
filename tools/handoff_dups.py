@@ -74,7 +74,7 @@ def scan(project_filter, read_per_m, write_per_m, since=None):
             inj.append((name, chars, digest, ts))
         if not inj:
             continue
-        calls = sum(1 for _ in iter_calls(p, seen=set()))
+        calls = sum(1 for _ in iter_calls(p, seen={}))
         sid = os.path.basename(p)[:-6]
         for name, chars, digest, ts in inj:
             per_ver[(name, digest)].append((ts, sid, chars, calls))
