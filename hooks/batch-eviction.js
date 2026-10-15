@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin, lockPeaks, projectDir } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks, projectDir } = require('./common');
 
 const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 150000;
 // Same reading as handoff-load.js: 0 = handoff off (nothing would load it).
@@ -46,6 +46,7 @@ readStdin(data => {
     p.handoff = file;
     p.handoff_at = new Date().toISOString();
     p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
+    p.lineage = lineage() || p.lineage;
     peaks[sid] = p;
     writePeaks(peaks);
   } finally { unlock(); }

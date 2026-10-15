@@ -103,6 +103,15 @@ function lockPeaks(timeoutMs) {
   }
 }
 
+// Who a session belongs to across /clear; '' when unknown. Measured 15/10 on CLI 2.1.295: the
+// SessionStart input carries no link to the cleared session. The desktop app starts a new CLI
+// process on /clear (source "startup") but keeps its session id in CLAUDE_CODE_HOST_SESSION_ID;
+// a terminal /clear keeps the process, and the CLI sets CLAUDE_PID for its hooks.
+function lineage() {
+  if (process.env.CLAUDE_CODE_HOST_SESSION_ID) return 'host:' + process.env.CLAUDE_CODE_HOST_SESSION_ID;
+  return process.env.CLAUDE_PID ? 'pid:' + process.env.CLAUDE_PID : '';
+}
+
 function sessionId(data) {
   return data.session_id || path.basename(data.transcript_path, '.jsonl');
 }
@@ -125,4 +134,4 @@ function readStdin(cb) {
   });
 }
 
-module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, lockPeaks, projectDir, sessionId, k, readStdin };
+module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, lockPeaks, projectDir, sessionId, lineage, alive, k, readStdin };

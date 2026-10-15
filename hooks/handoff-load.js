@@ -10,6 +10,10 @@
 // delivered twice, and the canary never depends on that mark being written.
 // Only for source "clear" and "startup"; resume/compact already carry history
 // (the installer registers the matcher; the check below is defence in depth).
+// Sibling sessions in one project: only a handoff of this session's own lineage loads
+// (common.js lineage(): the desktop session, or the CLI process of a terminal /clear). A new
+// session takes none from a sibling, except from a terminal session that has exited. A
+// session that does not know its own lineage (an older CLI) keeps the walk above.
 //
 // Also installs the context canary (after JuliusBrussee/skills, context-canary):
 // a fixed line at the top of every reply whose only job is to disappear when
@@ -20,7 +24,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
-const { readStdin, readPeaks, writePeaks, lockPeaks, projectDir } = require('./common');
+const { readStdin, readPeaks, writePeaks, lockPeaks, projectDir, lineage, alive } = require('./common');
 
 // HANDOFF_HOURS=0 turns the handoff off (a harness of `claude -p` runs opts out);
 // `parseFloat(x) || 72` used to swallow the 0.
@@ -28,11 +32,22 @@ const HOURS = (v => isNaN(v) ? 72 : v)(parseFloat(process.env.HANDOFF_HOURS));
 const CANARY = process.env.CANARY !== '0';
 const NAME = process.env.CANARY_NAME || 'Lastro';
 
+// '' when a session of lineage `mine` may load a handoff whose owner record is rec; else why not.
+function foreign(rec, mine, source) {
+  if (!rec.lineage) return 'its session recorded no lineage (it ran before the lineage check)';
+  if (rec.lineage === mine) return '';
+  // a terminal session that has exited is no sibling any more: a new session may resume its work
+  if (source !== 'clear' && mine.startsWith('pid:') && rec.lineage.startsWith('pid:') &&
+      !alive(parseInt(rec.lineage.slice(4), 10))) return '';
+  return 'it belongs to another session (' + rec.lineage + ')';
+}
+
 readStdin(data => {
   if (data.source && data.source !== 'clear' && data.source !== 'startup') return;
   const parts = [];
   let gen = 1;
   const sid = data.session_id || '';
+  const mine = lineage();
 
   const dir = path.join(projectDir(data), '.claude');   // the root, not the cd target
   // The path this session itself would write: the canary's TRIP names it.
@@ -69,6 +84,7 @@ readStdin(data => {
           const age = Math.max(0, Date.now() - h.t) / 3600000;
           const owner = Object.keys(peaks || {}).find(s => s.startsWith(h.n.slice(8, 16)));
           const rec = owner && peaks[owner];
+          let why = '';
           // mtime against mtime, not against a clock: a load inside that 2 s skew
           // would not count. handoff_loaded_at stays for humans and as the fallback
           // for peaks written before the mtime mark existed.
@@ -84,6 +100,10 @@ readStdin(data => {
             break;
           } else if (!owner) {
             process.stderr.write('handoff-load: skipping ' + h.n + ': no session with that id ran on this machine\n');
+            continue;
+          } else if (mine && (why = foreign(rec, mine, data.source))) {
+            process.stderr.write('handoff-load: skipping ' + h.n + ': ' + why + '\n');
+            if (!skipped) skipped = { n: h.n, why };
             continue;
           } else if (loaded) {
             process.stderr.write('handoff-load: skipping ' + h.n + ': already loaded by session ' + rec.handoff_loaded_by + '\n');

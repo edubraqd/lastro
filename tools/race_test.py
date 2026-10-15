@@ -47,6 +47,9 @@ def one_round(base, n, files):
         os.utime(p, (now - 60 * (i + 1), now - 60 * (i + 1)))   # distinct ages, newest first
     env = dict(os.environ, CLAUDE_CONFIG_DIR=home, CANARY="0", CLAUDE_PROJECT_DIR=proj)
     env.pop("HANDOFF_HOURS", None)
+    # the lineage of the session running the tool would make every seeded handoff foreign
+    for k in ("CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_PID"):
+        env.pop(k, None)
     procs = [subprocess.Popen(["node", HOOK], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env) for _ in range(n)]
     for i, p in enumerate(procs):   # feed every stdin before waiting on any, so the hooks overlap
         p.stdin.write(json.dumps({"source": "startup", "cwd": proj, "session_id": "%016x" % (0xb0000000 + i)}).encode("utf-8"))

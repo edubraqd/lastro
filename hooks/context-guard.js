@@ -20,7 +20,7 @@
 'use strict';
 const fs = require('fs');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, k, readStdin, lockPeaks } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks } = require('./common');
 
 const LIMIT = parseInt(process.env.CONTEXT_LIMIT, 10) || 200000;
 const STEP = 50000;
@@ -44,6 +44,7 @@ readStdin(data => {
   p.peak = Math.max(p.peak, ctx);
   p.last = new Date().toISOString();
   p.transcript = data.transcript_path;   // handoff-load.js names it to the next session
+  p.lineage = lineage() || p.lineage;     // and gives the handoff only to the same lineage
   // Route tag for A/B of launch paths (tools/ab-route.py): a session launched
   // through a local proxy inherits ANTHROPIC_BASE_URL on loopback.
   p.route = /127\.0\.0\.1|localhost/.test(process.env.ANTHROPIC_BASE_URL || '') ? 'proxy' : 'direct';

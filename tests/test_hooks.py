@@ -57,7 +57,8 @@ class HooksTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    KNOBS = ('CONTEXT_LANG', 'CANARY', 'CANARY_NAME', 'HANDOFF_HOURS', 'CONTEXT_LIMIT', 'EVICTION_LIMIT', 'CLAUDE_PROJECT_DIR', 'ANTHROPIC_BASE_URL')
+    KNOBS = ('CONTEXT_LANG', 'CANARY', 'CANARY_NAME', 'HANDOFF_HOURS', 'CONTEXT_LIMIT', 'EVICTION_LIMIT', 'CLAUDE_PROJECT_DIR', 'ANTHROPIC_BASE_URL',
+             'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_PID')   # the running session's lineage, read by handoff-load
 
     def hook_env(self, env=None):
         # the machine's own settings env (CONTEXT_LANG=pt, CANARY_NAME=...) must not reach the hook under test
