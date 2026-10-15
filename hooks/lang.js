@@ -14,10 +14,19 @@ const S = {
       'Finish the current task and tell the user to run /clear before the next one. ' +
       'Do not start a new task in this session.',
 
-    guardMid: (ctx, limit) =>
-      'MID-TURN CONTEXT: ~' + ctx + ' tokens are re-sent on every call (limit ' + limit + '). ' +
-      'Finish the step in progress, do not start another, and end the turn: the Stop hook asks for ' +
-      'the handoff (update it if this session already wrote one); then tell the user to run /clear.',
+    // Past the target the request may still finish; the stop point is a closed
+    // unit, never a cut mid-subgoal (SelfCompact rubric C1-C2).
+    guardMid: (ctx, target, ceiling, left) =>
+      'MID-TURN CONTEXT: ~' + ctx + ' tokens are re-sent on every call (target ' + target + ', ceiling ' + ceiling + ', ~' + left + ' left). ' +
+      'Finish the current request without opening new fronts: no exploratory reads; prefer Grep and Read with offset. ' +
+      'If finishing does not fit before the ceiling, stop at the next closed unit (tool result already visible, no edit half-done, ' +
+      'the state fits in the handoff without loss) and end the turn: the Stop hook asks for the handoff ' +
+      '(update it if this session already wrote one); then tell the user to run /clear.',
+
+    guardCeiling: (ctx, ceiling) =>
+      'MID-TURN CONTEXT AT THE CEILING: ~' + ctx + ' tokens are re-sent on every call (ceiling ' + ceiling + '). ' +
+      'Stop at the next closed unit (tool result already visible, no edit half-done), do not start another step and end the turn: ' +
+      'the Stop hook asks for the handoff (update it if this session already wrote one); then tell the user to run /clear.',
 
     // What a handoff must carry so the next session can act on it without
     // trusting it blindly: proof per item, exact files, one safe next step.
@@ -82,10 +91,17 @@ const S = {
       'Feche a tarefa atual e diga ao usuario para rodar /clear antes da proxima. ' +
       'Nao abra tarefa nova nesta sessao.',
 
-    guardMid: (ctx, limit) =>
-      'CONTEXTO NO MEIO DO TURNO: ~' + ctx + ' tokens re-enviados a cada chamada (limite ' + limit + '). ' +
-      'Termine o passo em andamento, nao comece outro e encerre o turno: o hook de parada pede o ' +
-      'handoff (atualize-o se esta sessao ja escreveu um); depois diga ao usuario para rodar /clear.',
+    guardMid: (ctx, target, ceiling, left) =>
+      'CONTEXTO NO MEIO DO TURNO: ~' + ctx + ' tokens re-enviados a cada chamada (meta ' + target + ', teto ' + ceiling + ', faltam ~' + left + '). ' +
+      'Conclua o pedido atual sem abrir frente nova: nada de leitura exploratoria; prefira Grep e Read com offset. ' +
+      'Se concluir nao cabe antes do teto, pare na proxima unidade fechada (resultado de ferramenta ja visivel, nenhuma edicao pela metade, ' +
+      'o estado cabe no handoff sem perda) e encerre o turno: o hook de parada pede o handoff ' +
+      '(atualize-o se esta sessao ja escreveu um); depois diga ao usuario para rodar /clear.',
+
+    guardCeiling: (ctx, ceiling) =>
+      'CONTEXTO NO MEIO DO TURNO, NO TETO: ~' + ctx + ' tokens re-enviados a cada chamada (teto ' + ceiling + '). ' +
+      'Pare na proxima unidade fechada (resultado de ferramenta ja visivel, nenhuma edicao pela metade), nao comece outro passo e encerre o turno: ' +
+      'o hook de parada pede o handoff (atualize-o se esta sessao ja escreveu um); depois diga ao usuario para rodar /clear.',
 
     evict: (ctx, file) =>
       'Contexto desta sessao esta em ~' + ctx + ' tokens, re-enviados a cada chamada. ' +

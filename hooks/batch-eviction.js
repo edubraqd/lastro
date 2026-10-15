@@ -9,14 +9,16 @@
 // handoff-load.js (SessionStart) re-injects that file after /clear.
 // Per-session record in ~/.claude/.context-peaks.json.
 //
-// Limit: EVICTION_LIMIT (default 150000 tokens). Language: CONTEXT_LANG=pt.
+// Limit: EVICTION_LIMIT (default 200000 tokens; 150000 until 09/10, when the
+// 08/10 simulation priced a restart at 150k at +5.8% and at 200k at +4.1%).
+// Language: CONTEXT_LANG=pt.
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
 const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks, projectDir } = require('./common');
 
-const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 150000;
+const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 200000;
 // Same reading as handoff-load.js: 0 = handoff off (nothing would load it).
 const HOURS = (v => isNaN(v) ? 72 : v)(parseFloat(process.env.HANDOFF_HOURS));
 

@@ -14,8 +14,9 @@ entries that run one of our hook scripts (from any checkout) are added or remove
 
 Environment knobs (put them under "env" in settings.json or export them):
   CONTEXT_LANG=pt      Portuguese strings (default: English)
-  CONTEXT_LIMIT=200000 context-guard threshold (tokens)
-  EVICTION_LIMIT=150000 batch-eviction threshold (tokens)
+  CONTEXT_LIMIT=200000 context-guard target (tokens): past it, no new fronts
+  CONTEXT_HARD_LIMIT=300000 context-guard ceiling (tokens): mid-turn stop at a closed unit
+  EVICTION_LIMIT=200000 batch-eviction threshold (tokens)
   HANDOFF_HOURS=72     max age of a handoff to re-inject; 0 turns the handoff off (canary stays)
   CANARY=0             disable the context canary
   CANARY_NAME=Lastro   name shown in the canary line

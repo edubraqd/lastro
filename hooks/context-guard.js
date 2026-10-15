@@ -16,13 +16,25 @@
 // 139-172 calls and reached 846k. Below the limit it touches nothing (it fires
 // on every tool call); above, it warns once and again after each STEP of change.
 //
-// Limit: CONTEXT_LIMIT (default 200000 tokens). Language: CONTEXT_LANG=pt.
+// Mid-turn it has two levels. Past the target (CONTEXT_LIMIT) the model may still
+// finish the request, without opening new fronts; at the ceiling it stops at the
+// next closed unit. Until 09/10 the target itself cut the turn: 135 turns in
+// 04-09/10 ended a median 4 calls after the warning, and 44% of the next prompts
+// were "segue"/"continue". Before the mid-turn guard (20/09-02/10), 86% of the
+// turns that crossed 200k finished on their own below 300k. A fixed-interval cut
+// fires mid-subgoal and erases what the model still needs; compacting at a
+// closed unit beats it (SelfCompact, rubric C1-C2; its backstop is 30% of the
+// window).
+//
+// Limits: CONTEXT_LIMIT (target, default 200000 tokens), CONTEXT_HARD_LIMIT
+// (ceiling, default 300000; never below the target). Language: CONTEXT_LANG=pt.
 'use strict';
 const fs = require('fs');
 const S = require('./lang');
 const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks } = require('./common');
 
 const LIMIT = parseInt(process.env.CONTEXT_LIMIT, 10) || 200000;
+const HARD = Math.max(LIMIT, parseInt(process.env.CONTEXT_HARD_LIMIT, 10) || 300000);
 const STEP = 50000;
 
 readStdin(data => {
@@ -49,9 +61,10 @@ readStdin(data => {
   // through a local proxy inherits ANTHROPIC_BASE_URL on loopback.
   p.route = /127\.0\.0\.1|localhost/.test(process.env.ANTHROPIC_BASE_URL || '') ? 'proxy' : 'direct';
   if (ctx >= LIMIT && !mid) p.turns_above += 1;
-  // a drop of STEP (after /compact) re-arms it too
-  const warn = !mid || p.mid_warned == null || Math.abs(ctx - p.mid_warned) >= STEP;
-  if (mid && warn) p.mid_warned = ctx;
+  // a drop of STEP (after /compact) re-arms it too; so does reaching the ceiling
+  const hard = ctx >= HARD;
+  const warn = !mid || p.mid_warned == null || Math.abs(ctx - p.mid_warned) >= STEP || (hard && !p.mid_hard);
+  if (mid && warn) { p.mid_warned = ctx; p.mid_hard = hard; }
   if (peaks) {
     peaks[sid] = p;
     // Bookkeeping only: a failed write must not swallow the warning below.
@@ -65,7 +78,8 @@ readStdin(data => {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: mid ? 'PostToolUse' : 'UserPromptSubmit',
-      additionalContext: mid ? S.guardMid(k(ctx), k(LIMIT)) : S.guard(k(ctx), k(LIMIT), k(p.peak), p.turns_above)
+      additionalContext: !mid ? S.guard(k(ctx), k(LIMIT), k(p.peak), p.turns_above)
+        : hard ? S.guardCeiling(k(ctx), k(HARD)) : S.guardMid(k(ctx), k(LIMIT), k(HARD), k(HARD - ctx))
     }
   }));
 });

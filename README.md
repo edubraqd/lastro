@@ -25,7 +25,7 @@ Measured on 674 real sessions from one user (not an estimate):
 The fix is simple and nobody does it at the right moment: **before leaving,
 save a summary of what was done and clear the conversation (`/clear`)**. When
 you come back, Claude reads the summary instead of re-reading everything.
-Above 150k tokens Lastro does it for you; below that, before leaving, ask
+Above 200k tokens Lastro does it for you; below that, before leaving, ask
 Claude to write the handoff to `.claude/handoff-<session>.md` (the canary
 line's TRIP clause names the exact path; with `CANARY=0` there is no such
 line, so name the file yourself: `handoff-` + the first 8 hex of the session
@@ -37,8 +37,9 @@ Four small automations (hooks) that run inside Claude Code:
 
 | when | what you see |
 |---|---|
-| the conversation passes 150k tokens | Claude writes a summary of the work to `.claude/handoff-<session>.md` before stopping. The essentials are kept (about 60 lines); the full transcript stays in `~/.claude/projects` and the next session is told where it is when the summary is loaded. |
-| it passes 200k | in every reply Claude says it is heavy and asks you for `/clear`. |
+| the conversation passes 200k tokens | Claude writes a summary of the work to `.claude/handoff-<session>.md` before stopping. The essentials are kept (about 60 lines); the full transcript stays in `~/.claude/projects` and the next session is told where it is when the summary is loaded. |
+| it passes 200k | Claude finishes what you asked without opening new fronts, and in every reply asks you for `/clear` before the next task. |
+| it passes 300k in the middle of a reply | Claude stops at the next closed step (a tool result already in, no edit half-done), writes the summary and asks for `/clear`. |
 | you `/clear` or open a new session | after `/clear`, the newest summary this same session wrote that can still be loaded — less than 72 h old (`HANDOFF_HOURS`), not loaded before — enters on its own and work resumes where it stopped. A new session takes no summary from another session, so two sessions open in the same project do not pick up each other's work; the only exception is a terminal session that has already exited, whose summary the next terminal session resumes. A handoff file that arrived by `git clone` or copy is skipped, and does not hide an older one of yours. If a summary exists but could not be loaded, Claude is told so and why, and does not read it unless you ask. |
 | every reply after that | the first line is `**Lastro · t3 · ctx ok**`: the number goes up each reply and `ok / aging / thin` says whether Claude still remembers the decisions. If the line **disappears**, it already forgot — time to `/clear`. |
 | Claude reads half a file | it is told how many lines remain, so it does not start over. |
@@ -178,8 +179,8 @@ global token counter.
 
 | hook | event | does |
 |---|---|---|
-| `context-guard.js` | UserPromptSubmit, PostToolUse (`*`) | reads the context of the last call from the transcript; above `CONTEXT_LIMIT` (200k) tells the model, every turn, to finish and ask for `/clear`. As PostToolUse it covers the middle of one long turn, which no prompt or Stop hook sees (measured 30/09-03/10: single prompts ran 139-172 calls and reached 846k): below the limit it does nothing, above it warns once and again after each 50k of change. Right after `/compact` the size is unknown until the next call (the summary's token count is not the context), so it stays quiet for that one prompt. Records per-session peaks in `~/.claude/.context-peaks.json`; a peaks file it cannot read or write is left alone (the warning still goes out; the failure is one line on stderr). |
-| `batch-eviction.js` | Stop | above `EVICTION_LIMIT` (150k), once per session, holds the stop and makes the model write a handoff to `<project root>/.claude/handoff-<session>.md` (`CLAUDE_PROJECT_DIR`, not the folder the session has `cd`-ed into). |
+| `context-guard.js` | UserPromptSubmit, PostToolUse (`*`) | reads the context of the last call from the transcript; above `CONTEXT_LIMIT` (200k) tells the model, every turn, to finish and ask for `/clear`. As PostToolUse it covers the middle of one long turn, which no prompt or Stop hook sees (measured 30/09-03/10: single prompts ran 139-172 calls and reached 846k): below the limit it does nothing, above it warns once and again after each 50k of change. Mid-turn it has two levels: past `CONTEXT_LIMIT` the model may still finish the request, without opening new fronts; at `CONTEXT_HARD_LIMIT` (300k, never below `CONTEXT_LIMIT`) it stops at the next closed unit. Until 09/10 the 200k limit itself cut the turn: 135 turns in 04-09/10 ended a median 4 calls after the warning, and 44% of the next prompts were "segue"/"continue"; before the mid-turn guard (20/09-02/10), 86% of the turns that crossed 200k finished on their own below 300k. Right after `/compact` the size is unknown until the next call (the summary's token count is not the context), so it stays quiet for that one prompt. Records per-session peaks in `~/.claude/.context-peaks.json`; a peaks file it cannot read or write is left alone (the warning still goes out; the failure is one line on stderr). |
+| `batch-eviction.js` | Stop | above `EVICTION_LIMIT` (200k; 150k until 09/10), once per session, holds the stop and makes the model write a handoff to `<project root>/.claude/handoff-<session>.md` (`CLAUDE_PROJECT_DIR`, not the folder the session has `cd`-ed into). |
 | `handoff-load.js` | SessionStart (`startup\|clear`) | after `/clear` or a new session, walks the handoffs from newest to oldest and injects the first one it can load (< `HANDOFF_HOURS`, 72; `0` turns the handoff off for e.g. a batch of `claude -p` runs; written by a session that ran on this machine and shares the starting session's lineage; not loaded before). The lineage comes from `lineage()` in `common.js`: `host:` + `CLAUDE_CODE_HOST_SESSION_ID` in the desktop app, where `/clear` starts a new CLI process with source `startup` but keeps the `local_` session id, and `pid:` + `CLAUDE_PID` in a terminal, where `/clear` keeps the process (both measured 15/10); `context-guard.js` and `batch-eviction.js` write it as `lineage` into `.context-peaks.json`. A new session takes no handoff from a sibling; the only exception is a new terminal session, which may load the handoff of a terminal session whose pid has exited (before this, on 15/10, with four desktop sessions in one project, every `/clear` and every new session took the newest handoff not loaded yet, whoever wrote it, and the session that wrote it got another one on its own `/clear`). A record without `lineage`, written before the check, is not delivered to a session that has one; a session without a lineage (an older CLI) keeps the old rule: the newest not loaded yet. Sessions that start in the same instant take turns through a lock file next to `.context-peaks.json` (measured before it: one file reached 2-6 of 28 parallel starts). The file is looked for under `CLAUDE_PROJECT_DIR/.claude`, the root the session started in, because stdin `cwd` follows the Bash tool's `cd` (before this, 45 of 213 handoffs on one machine were written into a subfolder and 26 never loaded). A foreign or already-loaded file does not hide an older one of yours; a file that exists but was not loaded is named to the model, with the reason. The load is recorded (by the file's mtime, in `.context-peaks.json`) before the text goes in: if the mark cannot be written, nothing is injected and the next `/clear` tries again. The text goes in as a `<handoff>` file (first 12000 chars; a note after the block gives the path to the rest) the model is told to check against the working tree. Then it installs a **context canary**: a byte-stable first line (`**Lastro · t<N> · ctx ok**`) that disappears when the instruction has fallen out of context; the canary never depends on the handoff. |
 | `read-recovery.js` | PostToolUse (Read) | when a `Read` had a `limit`, tells the model how many lines remain and the offset to continue from. |
 
@@ -195,9 +196,9 @@ python hooks/install.py --uninstall [--project .]
 ```
 
 Knobs, as environment variables or under `"env"` in settings.json:
-`CONTEXT_LANG=pt` (Portuguese strings), `CONTEXT_LIMIT`, `EVICTION_LIMIT`,
+`CONTEXT_LANG=pt` (Portuguese strings), `CONTEXT_LIMIT`, `CONTEXT_HARD_LIMIT`, `EVICTION_LIMIT`,
 `HANDOFF_HOURS`, `CANARY=0` (also removes the only place the model is told
-the handoff path below 150k), `CANARY_NAME`.
+the handoff path below 200k), `CANARY_NAME`.
 
 Why a handoff file and not `/compact`: a pruned history with a short summary
 of what was done beat both the full history and a full-history summary on

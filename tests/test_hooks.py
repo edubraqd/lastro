@@ -57,7 +57,7 @@ class HooksTest(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
-    KNOBS = ('CONTEXT_LANG', 'CANARY', 'CANARY_NAME', 'HANDOFF_HOURS', 'CONTEXT_LIMIT', 'EVICTION_LIMIT', 'CLAUDE_PROJECT_DIR', 'ANTHROPIC_BASE_URL',
+    KNOBS = ('CONTEXT_LANG', 'CANARY', 'CANARY_NAME', 'HANDOFF_HOURS', 'CONTEXT_LIMIT', 'CONTEXT_HARD_LIMIT', 'EVICTION_LIMIT', 'CLAUDE_PROJECT_DIR', 'ANTHROPIC_BASE_URL',
              'CLAUDE_CODE_HOST_SESSION_ID', 'CLAUDE_PID')   # the running session's lineage, read by handoff-load
 
     def hook_env(self, env=None):
@@ -121,6 +121,47 @@ class HooksTest(unittest.TestCase):
         o = self.run_hook('context-guard', {**post, 'transcript_path': grown}, {'CONTEXT_LIMIT': '1000', 'CONTEXT_LANG': 'pt'})
         self.assertIn('MEIO DO TURNO', o['hookSpecificOutput']['additionalContext'], 'warns again after +50k (pt)')
         self.assertEqual(self.peaks()[sid]['peak'], 360005)
+
+    def ctx_transcript(self, name, ctx):
+        tp = os.path.join(self.tmp, name + '.jsonl')
+        call = {'type': 'assistant', 'requestId': 'req_' + name, 'message': {'id': 'msg_' + name, 'usage': {
+            'input_tokens': 5, 'cache_creation_input_tokens': 1000, 'cache_read_input_tokens': ctx - 1005, 'output_tokens': 50}}}
+        with open(tp, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps(call) + '\n')
+        return tp
+
+    def test_context_guard_target_then_ceiling(self):
+        # Between CONTEXT_LIMIT (target) and CONTEXT_HARD_LIMIT (ceiling) the turn may finish the
+        # request; only the ceiling stops it. Measured 20/09-02/10, before the mid-turn guard: of
+        # 147 turns that crossed 200k mid-turn, 86% finished on their own below 300k.
+        sid = 'cafe' + SID[4:]
+        post = {**self.base, 'session_id': sid, 'hook_event_name': 'PostToolUse', 'tool_name': 'Read',
+                'transcript_path': self.ctx_transcript('t250', 250000)}
+        o = self.run_hook('context-guard', post, {'CONTEXT_LANG': 'pt'})
+        ctx = o['hookSpecificOutput']['additionalContext']
+        self.assertIn('MEIO DO TURNO', ctx, 'defaults: 250k is past the 200k target')
+        self.assertIn('Conclua o pedido atual', ctx, 'below the ceiling the request may finish')
+        self.assertIn('teto 300k', ctx, 'default ceiling 300k')
+        self.assertIn('faltam ~50k', ctx, 'says how much is left before the ceiling')
+        self.assertNotIn('NO TETO', ctx)
+        # crossing the ceiling warns at once, even less than 50k after the target warning
+        at = {**post, 'transcript_path': self.ctx_transcript('t290', 290000)}
+        o = self.run_hook('context-guard', at, {'CONTEXT_LANG': 'pt', 'CONTEXT_HARD_LIMIT': '280000'})
+        self.assertIn('NO TETO', o['hookSpecificOutput']['additionalContext'], 'the ceiling re-arms the warning')
+        self.assertIsNone(self.run_hook('context-guard', at, {'CONTEXT_LANG': 'pt', 'CONTEXT_HARD_LIMIT': '280000'}), 'no repeat at the ceiling either')
+        en = {**post, 'session_id': 'fade' + SID[4:], 'transcript_path': self.ctx_transcript('t310', 310000)}
+        self.assertIn('AT THE CEILING', self.run_hook('context-guard', en)['hookSpecificOutput']['additionalContext'], 'default ceiling, en')
+        # a ceiling set below the target is the target: the band is empty, as before 09/10
+        low = {**post, 'session_id': 'face' + SID[4:], 'transcript_path': self.ctx_transcript('t260', 260000)}
+        o = self.run_hook('context-guard', low, {'CONTEXT_LIMIT': '250000', 'CONTEXT_HARD_LIMIT': '200000'})
+        self.assertIn('AT THE CEILING', o['hookSpecificOutput']['additionalContext'])
+
+    def test_batch_eviction_default_200k(self):
+        # 150k -> 200k on 09/10: the 08/10 simulation priced a restart at 150k (+5.8%) above one at 200k (+4.1%).
+        sid = 'dada' + SID[4:]
+        self.assertIsNone(self.run_hook('batch-eviction', {**self.base, 'session_id': sid, 'transcript_path': self.ctx_transcript('t190', 190000)}), 'below the 200k default')
+        o = self.run_hook('batch-eviction', {**self.base, 'session_id': sid, 'transcript_path': self.ctx_transcript('t210', 210000)})
+        self.assertEqual(o['decision'], 'block')
 
     def test_batch_eviction(self):
         o = self.run_hook('batch-eviction', self.base, {'EVICTION_LIMIT': '1000'})
