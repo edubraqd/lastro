@@ -12,7 +12,7 @@ import ledger  # noqa: E402  (prices, per_m_input, call_usd, load com dedup por 
 
 PROJ = os.path.join(os.path.expanduser('~'), '.claude', 'projects')
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'medir_workflows.json')
-COST_TAGS = r'C:/Users/eduar/AppData/Local/Temp/claude/D--Clientes-Motor-2mil/0cfc1d2d-00bc-4bb6-b054-8dc0e26a1710/scratchpad/cost_tags.json'
+COST_TAGS = os.environ.get('COST_TAGS', '')  # opcional: json de tags de custo por sessao
 SINCE = '2026-08-24'   # janela do cost_tags.py
 
 seen = {}  # ledger.load (e056993) guarda a chamada por (message.id, requestId)
