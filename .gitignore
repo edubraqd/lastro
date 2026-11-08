@@ -17,3 +17,4 @@ data/issues/*/md/
 
 # one-afternoon probes and drafts of issue comments; not part of the tool set
 scratch/
+tools/medir_workflows.json
