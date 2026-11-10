@@ -62,21 +62,36 @@ class LineageTest(unittest.TestCase):
         # the owner record comes from the guard, as in production (a prompt in that session)
         self.run_hook('context-guard', {'session_id': sid, 'transcript_path': self.tr, 'cwd': self.cwd,
                                         'hook_event_name': 'UserPromptSubmit'}, env)
+        self.handoff(sid, minutes_ago)
+
+    def handoff(self, sid, minutes_ago):
         f = os.path.join(self.proj, 'handoff-' + sid[:8] + '.md')
         with open(f, 'w', encoding='utf-8') as fh:
             fh.write('# Handoff ' + sid[:8] + '\n')
         t = time.time() - minutes_ago * 60
         os.utime(f, (t, t))
 
-    def start(self, sid, env, source='startup'):
-        return self.run_hook('handoff-load', {'source': source, 'cwd': self.cwd, 'session_id': sid}, env)
+    def transcript_of(self, sid):
+        p = os.path.join(self.tmp, sid + '.jsonl')
+        with open(p, 'w', encoding='utf-8') as fh:
+            fh.write('{}\n')
+        return p
+
+    def start(self, sid, env, source='startup', transcript=None):
+        payload = {'source': source, 'cwd': self.cwd, 'session_id': sid}
+        if transcript:
+            payload['transcript_path'] = transcript
+        return self.run_hook('handoff-load', payload, env)
 
     def got(self, text):
         return [l[len('# Handoff '):] for l in text.splitlines() if l.startswith('# Handoff ')]
 
     def peaks(self):
-        with open(os.path.join(self.cfg, '.context-peaks.json'), encoding='utf-8') as fh:
-            return json.load(fh)
+        try:
+            with open(os.path.join(self.cfg, '.context-peaks.json'), encoding='utf-8') as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            return {}
 
     def test_desktop_cascade(self):
         a, b, c = 'aaaa0001' * 2, 'bbbb0002' * 2, 'cccc0003' * 2
@@ -129,6 +144,78 @@ class LineageTest(unittest.TestCase):
         self.assertIn('handoff-abab0007.md) but was NOT loaded', t)
         # a session without a lineage (an older CLI) keeps the old walk: the newest not loaded yet
         self.assertEqual(self.got(self.start('abab2222' * 2, {})), ['abab0007'])
+
+    def test_a_generation_that_never_reached_the_guard_still_hands_off(self):
+        # F4 (08/11): the guard records a session from its second prompt on, or above 200k. A generation that
+        # works one long turn (the zelador's "segue") and then writes its handoff was refused at the next
+        # start: "no session with that id ran on this machine". The start itself puts the session on record.
+        a1 = 'a1a1a1a1' * 2
+        tr = self.transcript_of(a1)
+        self.start(a1, desktop('a', 101), transcript=tr)
+        rec = self.peaks().get(a1)
+        self.assertIsNotNone(rec, 'the start puts the session on record')
+        self.assertEqual((rec['lineage'], rec['transcript']), ('host:local_a', tr))
+        self.assertIn('started', rec, 'the start time: generation order, and the clear gate')
+        self.handoff(a1, 1)
+        self.assertEqual(self.got(self.start('a2a2a2a2' * 2, desktop('a', 102))), ['a1a1a1a1'])
+        # HANDOFF_HOURS=0 (a batch of `claude -p`) opts out: nothing would load a handoff, nothing is recorded
+        self.start('a0a0a0a0' * 2, {**desktop('z', 109), 'HANDOFF_HOURS': '0'})
+        self.assertNotIn('a0a0a0a0' * 2, self.peaks())
+
+    def test_a_generation_that_left_no_handoff_does_not_break_the_chain(self):
+        # F3, measured 08/11 (5083713b): gen 2 loaded gen 1's handoff and ended without one of its own; gen 3
+        # got nothing ("already loaded") and a note on its mother session's newer handoff. Desktop generations
+        # run in series, so the newest handoff of the lineage loads again, naming the generation that took it.
+        a1, a2, a3 = 'a1a1a1a1' * 2, 'a2a2a2a2' * 2, 'a3a3a3a3' * 2
+        self.ran_and_left_a_handoff(a1, desktop('a', 101), 5)
+        tr2 = self.transcript_of(a2)
+        self.assertEqual(self.got(self.start(a2, desktop('a', 102), transcript=tr2)), ['a1a1a1a1'])
+        self.ran_and_left_a_handoff('b0b0b0b0' * 2, desktop('mother', 100), 1)
+        t = self.start(a3, desktop('a', 103), transcript=self.transcript_of(a3))
+        self.assertEqual(self.got(t), ['a1a1a1a1'], 'gen 3 gets the last handoff of its lineage again')
+        self.assertIn('loaded before by ' + a2, t)
+        self.assertIn(tr2, t, 'with the transcript of the generation that left none')
+        self.assertNotIn('handoff-b0b0b0b0.md', t, 'and no word on the sibling')
+        self.assertNotIn('ended without writing a handoff', t, 'one note on gen 2, not two')
+        self.assertEqual(self.peaks()[a1]['handoff_loaded_by'], a3)
+
+    def test_a_terminal_keeps_the_one_time_load(self):
+        # the reload is for desktop generations only: a pid is reused by the OS, and two new terminal sessions
+        # may both inherit one that exited. The refusal names the own lineage's handoff, not a sibling's newer
+        # one (08/11: 5083713b was pointed at its mother's handoff)
+        p1, p2, p3 = 'c1c1c1c1' * 2, 'c2c2c2c2' * 2, 'c3c3c3c3' * 2
+        self.ran_and_left_a_handoff(p1, terminal(os.getpid()), 4)
+        self.assertEqual(self.got(self.start(p2, terminal(os.getpid()), 'clear')), ['c1c1c1c1'])
+        self.ran_and_left_a_handoff('b0b0b0b0' * 2, desktop('mother', 100), 1)
+        t = self.start(p3, terminal(os.getpid()), 'clear')
+        self.assertEqual(self.got(t), [])
+        self.assertIn('handoff-c1c1c1c1.md) but was NOT loaded: already loaded by session ' + p2, t)
+        self.assertNotIn('ended without writing a handoff', t, 'a terminal /clear without a handoff is on purpose')
+
+    def test_a_generation_that_ended_without_a_handoff_is_named(self):
+        # F5 (08/11, guinea pigs 13:25-13:39Z): the CLI exits on its own and the next message opens a
+        # generation without the conversation; with no handoff in the lineage it heard nothing at all
+        a1, a2 = 'a1a1a1a1' * 2, 'a2a2a2a2' * 2
+        tr1 = self.transcript_of(a1)
+        self.start(a1, desktop('a', 101), transcript=tr1)
+        t = self.start(a2, desktop('a', 102), transcript=self.transcript_of(a2))
+        self.assertEqual(self.got(t), [])
+        self.assertIn('(' + a1 + ') ended without writing a handoff', t)
+        self.assertIn(tr1, t)
+        # one that did leave a handoff: it loads, with no such note
+        self.handoff(a2, 0)
+        t = self.start('a3a3a3a3' * 2, desktop('a', 103))
+        self.assertEqual(self.got(t), ['a2a2a2a2'])
+        self.assertNotIn('ended without writing a handoff', t)
+        # another session's first generation hears nothing of this lineage
+        self.assertNotIn('ended without writing a handoff', self.start('b1b1b1b1' * 2, desktop('b', 201)))
+        # nor of a generation older than the handoff window: what is older is not resumed either
+        self.start('c1c1c1c1' * 2, desktop('c', 301))
+        p = self.peaks()
+        p['c1c1c1c1' * 2]['started'] = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() - 100 * 3600))
+        with open(os.path.join(self.cfg, '.context-peaks.json'), 'w', encoding='utf-8') as fh:
+            json.dump(p, fh)
+        self.assertNotIn('ended without writing a handoff', self.start('c2c2c2c2' * 2, desktop('c', 302)))
 
 
 if __name__ == '__main__':

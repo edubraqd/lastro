@@ -31,7 +31,7 @@
 'use strict';
 const fs = require('fs');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks, mission } = require('./common');
 
 const LIMIT = parseInt(process.env.CONTEXT_LIMIT, 10) || 200000;
 const HARD = Math.max(LIMIT, parseInt(process.env.CONTEXT_HARD_LIMIT, 10) || 300000);
@@ -75,11 +75,14 @@ readStdin(data => {
   if (unlock) unlock();
 
   if (ctx < LIMIT || !warn) return;
+  // An armed mission with a live watcher: the clear is the session's own, not the user's (zelador).
+  const z = mission();
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: mid ? 'PostToolUse' : 'UserPromptSubmit',
-      additionalContext: !mid ? S.guard(k(ctx), k(LIMIT), k(p.peak), p.turns_above)
-        : hard ? S.guardCeiling(k(ctx), k(HARD)) : S.guardMid(k(ctx), k(LIMIT), k(HARD), k(HARD - ctx))
+      additionalContext: (!mid ? S.guard(k(ctx), k(LIMIT), k(p.peak), p.turns_above)
+        : hard ? S.guardCeiling(k(ctx), k(HARD)) : S.guardMid(k(ctx), k(LIMIT), k(HARD), k(HARD - ctx))) +
+        (z && z.watched ? '\n' + S.zCycle() : '')
     }
   }));
 });

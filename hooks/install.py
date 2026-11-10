@@ -11,6 +11,7 @@ entries that run one of our hook scripts (from any checkout) are added or remove
     python hooks/install.py --uninstall
     python hooks/install.py --only context-guard,handoff-load   # add or refresh just these
     python hooks/install.py --only read-recovery --uninstall    # remove just this one
+    python hooks/install.py --only clear-gate,mission-arm       # opt-in, never installed by default
 
 Environment knobs (put them under "env" in settings.json or export them):
   CONTEXT_LANG=pt      Portuguese strings (default: English)
@@ -34,7 +35,12 @@ HOOKS = {
     "batch-eviction": ("Stop", None, "Checking context for eviction..."),
     "handoff-load": ("SessionStart", "startup|clear", "Loading handoff..."),
     "read-recovery": ("PostToolUse", "Read", "Checking Read cut..."),
+    "clear-gate": ("PreToolUse", "mcp__ccd_session_mgmt__clear_session", "Checking clear request..."),
+    "mission-arm": ("UserPromptExpansion", "missao", "Arming mission..."),
 }
+# Installed only by name (--only), both part of the zelador (zelador/ZELADOR.md): the clear gate
+# answers a permission prompt; mission-arm writes the mission state when the user types /missao.
+OPT_IN = {"clear-gate", "mission-arm"}
 
 
 def node_path():
@@ -89,7 +95,8 @@ def main():
             settings = json.load(f)
     hooks = settings.setdefault("hooks", {})
 
-    wanted = [n.strip() for n in args.only.split(",")] if args.only else list(HOOKS)
+    wanted = ([n.strip() for n in args.only.split(",")] if args.only
+              else [n for n in HOOKS if args.uninstall or n not in OPT_IN])
     for name in wanted:
         if name not in HOOKS:
             sys.exit("unknown hook: " + name)

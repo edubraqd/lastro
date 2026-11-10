@@ -709,6 +709,46 @@ class HooksTest(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, 'unknown hook name is an error for --uninstall too')
         self.run_py('hooks/install.py', '--uninstall')
 
+    def test_install_clear_gate_is_opt_in(self):
+        settings_path = os.path.join(self.cfg, 'settings.json')
+        if os.path.exists(settings_path):
+            os.remove(settings_path)
+
+        def pre():
+            with open(settings_path, encoding='utf-8') as fh:
+                return json.load(fh).get('hooks', {}).get('PreToolUse', [])
+        self.run_py('hooks/install.py')
+        self.assertEqual(pre(), [], 'the clear gate answers a permission prompt: never installed by default')
+        self.run_py('hooks/install.py', '--only', 'clear-gate')
+        self.run_py('hooks/install.py', '--only', 'clear-gate')
+        g = pre()
+        self.assertEqual([x.get('matcher') for x in g], ['mcp__ccd_session_mgmt__clear_session'], '--only adds it once')
+        self.assertTrue(g[0]['hooks'][0]['command'].endswith('/hooks/clear-gate.js"'), g)
+        self.run_py('hooks/install.py')
+        self.assertEqual(len(pre()), 1, 'a default install keeps a gate that is already there')
+        r = self.run_py('hooks/install.py', '--uninstall')
+        self.assertIn('removed 6 entries', r.stdout, 'a full uninstall takes the gate too')
+        self.assertEqual(pre(), [], 'nothing of ours left')
+
+    def test_install_mission_arm_is_opt_in(self):
+        settings_path = os.path.join(self.cfg, 'settings.json')
+        if os.path.exists(settings_path):
+            os.remove(settings_path)
+
+        def exp():
+            with open(settings_path, encoding='utf-8') as fh:
+                return json.load(fh).get('hooks', {}).get('UserPromptExpansion', [])
+        self.run_py('hooks/install.py')
+        self.assertEqual(exp(), [], 'the arming hook writes the zelador\'s state: never installed by default')
+        self.run_py('hooks/install.py', '--only', 'mission-arm')
+        self.run_py('hooks/install.py', '--only', 'mission-arm')
+        g = exp()
+        self.assertEqual([x.get('matcher') for x in g], ['missao'], '--only adds it once, and only for /missao')
+        self.assertTrue(g[0]['hooks'][0]['command'].endswith('/hooks/mission-arm.js"'), g)
+        r = self.run_py('hooks/install.py', '--uninstall')
+        self.assertIn('removed 6 entries', r.stdout, 'a full uninstall takes it too')
+        self.assertEqual(exp(), [], 'nothing of ours left')
+
     def test_uninstall_from_a_moved_checkout(self):
         settings_path = os.path.join(self.cfg, 'settings.json')
         if os.path.exists(settings_path):

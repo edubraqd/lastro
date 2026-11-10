@@ -118,6 +118,29 @@ function sessionId(data) {
 
 function k(n) { return Math.round(n / 1000) + 'k'; }
 
+// Zelador: a mission the user armed for this desktop session (zelador/missao.py) and the watcher
+// whose exit makes the keeper session send "segue" after a self-clear (zelador/vigia.py).
+// null when this session has no armed mission; `watched` = a watcher process is alive.
+const zDir = path.join(claudeDir, 'zelador');
+function readJson(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return null; }
+}
+function mission() {
+  const host = process.env.CLAUDE_CODE_HOST_SESSION_ID || '';
+  if (!/^local_[\w-]+$/.test(host)) return null;
+  const file = path.join(zDir, 'missoes', host + '.json');
+  const m = readJson(file);
+  if (!m || m.estado !== 'armada') return null;
+  const v = readJson(path.join(zDir, 'vivo.json'));
+  // The watcher wakes its keeper by exiting: with the keeper's CLI gone, nobody would be woken.
+  return { host, file, m, watched: !!(v && v.pid > 0 && alive(v.pid) && !(v.cli > 0 && !alive(v.cli))) };
+}
+// This generation already filed its clear request: its handoff is written, the clear is queued.
+function requested(z, sid) {
+  const r = z && readJson(path.join(zDir, 'pedidos', z.host + '.json'));
+  return !!r && r.sid === sid;
+}
+
 // A hook that dies with a stack trace (exit 1) is shown to the user on every
 // prompt; one line on stderr and exit 0 keeps the failure visible in --debug
 // without shouting or blocking.
@@ -134,4 +157,4 @@ function readStdin(cb) {
   });
 }
 
-module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, lockPeaks, projectDir, sessionId, lineage, alive, k, readStdin };
+module.exports = { claudeDir, peaksPath, currentContext, readPeaks, writePeaks, lockPeaks, projectDir, sessionId, lineage, alive, k, readStdin, zDir, readJson, mission, requested };

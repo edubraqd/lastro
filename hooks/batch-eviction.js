@@ -16,7 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const S = require('./lang');
-const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks, projectDir } = require('./common');
+const { currentContext, readPeaks, writePeaks, sessionId, lineage, k, readStdin, lockPeaks, projectDir, mission, requested } = require('./common');
 
 const LIMIT = parseInt(process.env.EVICTION_LIMIT, 10) || 200000;
 // Same reading as handoff-load.js: 0 = handoff off (nothing would load it).
@@ -29,6 +29,9 @@ readStdin(data => {
   if (ctx < LIMIT) return;
 
   const sid = sessionId(data);
+  // Zelador: this generation already wrote its handoff and queued its own clear (clear-gate filed it).
+  const z = mission();
+  if (z && requested(z, sid)) return;
   // null = the file exists but did not parse (another session mid-write): without it
   // there is no way to tell whether this session already got its handoff; next turn.
   let unlock;
@@ -55,6 +58,6 @@ readStdin(data => {
 
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    reason: S.evict(k(ctx), file)
+    reason: z && z.watched ? S.evictZ(k(ctx), file) : S.evict(k(ctx), file)
   }));
 });
