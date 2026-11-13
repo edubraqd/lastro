@@ -23,6 +23,9 @@
 // a previous generation that ended without a handoff (a /clear, or a CLI that exited on its
 // own) is named with its transcript (F5). A terminal keeps the one-time load: its lineage is
 // a pid the OS reuses, and two new terminal sessions may both inherit one that exited.
+// A desktop session where nothing of its own lineage loaded is told of the lineage's newest
+// handoff past the window, path and age, ahead of any sibling's refusal; named, not loaded
+// (13/11: a session idle 98 h got "segue" and heard only of a sibling's handoff 3 h old).
 //
 // Also installs the context canary (after JuliusBrussee/skills, context-canary):
 // a fixed line at the top of every reply whose only job is to disappear when
@@ -188,8 +191,16 @@ readStdin(data => {
         if (prev && prev.sid !== again && !fs.existsSync(path.join(dir, 'handoff-' + prev.sid.slice(0, 8) + '.md'))) {
           parts.push(S.handoffNone(prev.sid, transcriptOf(prev.rec)));
         }
+        // Desktop, nothing of its own loaded: the lineage's newest handoff past the window is named,
+        // path and age, ahead of a sibling's refusal. Named, not loaded: the window bounds what goes in unasked.
+        const stale = serial && peaks && !wrote && !failed ? cands.find(h => {
+          if ((Date.now() - h.t) / 3600000 <= HOURS) return false;
+          const owner = Object.keys(peaks).find(s => s.startsWith(h.n.slice(8, 16)));
+          return !!owner && !!peaks[owner] && peaks[owner].lineage === mine;
+        }) : null;
         const note = refused.find(r => r.own) || refused[0];
-        if (note) parts.push(S.handoffSkipped(note.n, note.why));
+        if (stale) parts.push(S.handoffStale(stale.p, ((Date.now() - stale.t) / 3600000).toFixed(1), HOURS));
+        else if (note) parts.push(S.handoffSkipped(note.n, note.why));
       } finally { unlock(); }
     }
   } catch (e) {

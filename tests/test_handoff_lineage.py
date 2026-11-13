@@ -217,6 +217,32 @@ class LineageTest(unittest.TestCase):
             json.dump(p, fh)
         self.assertNotIn('ended without writing a handoff', self.start('c2c2c2c2' * 2, desktop('c', 302)))
 
+    def test_a_session_idle_past_the_window_is_pointed_at_its_own_handoff(self):
+        # 13/11 ~17:13Z, PRO-EX: a desktop session idle since 09/11 got /clear + "segue". Its last handoff was 98 h
+        # old: the walk ended there, and the one note named a sibling's handoff 3 h old ("it belongs to another
+        # session"). The own lineage's newest handoff is named, path and age, however old, and before any sibling's;
+        # it is not loaded: the window still bounds what goes in unasked.
+        a1 = 'a1a1a1a1' * 2
+        self.ran_and_left_a_handoff(a1, desktop('a', 101), 98 * 60)
+        p = self.peaks()
+        p[a1]['last'] = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() - 98 * 3600))
+        with open(os.path.join(self.cfg, '.context-peaks.json'), 'w', encoding='utf-8') as fh:
+            json.dump(p, fh)
+        self.ran_and_left_a_handoff('b1b1b1b1' * 2, desktop('b', 201), 3 * 60)
+        t = self.start('a2a2a2a2' * 2, desktop('a', 102))
+        self.assertEqual(self.got(t), [], 'past the window: named, not loaded')
+        self.assertIn(os.path.join(self.proj, 'handoff-a1a1a1a1.md'), t, 'with the path to read it from')
+        self.assertIn('98.0 h', t, 'and its age')
+        self.assertNotIn('handoff-b1b1b1b1.md', t, 'the own lineage first: no word on the sibling')
+        self.assertNotIn('handoff_loaded_by', json.dumps(self.peaks()[a1]), 'nothing is marked as loaded')
+        # a terminal keeps its walk: it ends at the window, and the note is the sibling's refusal
+        self.ran_and_left_a_handoff('c1c1c1c1' * 2, terminal(os.getpid()), 98 * 60)
+        t = self.start('c2c2c2c2' * 2, terminal(os.getpid()), 'clear')
+        self.assertNotIn('handoff-c1c1c1c1.md', t)
+        self.assertIn('handoff-b1b1b1b1.md) but was NOT loaded', t)
+        # HANDOFF_HOURS=0 still turns the handoff off, this note with it
+        self.assertNotIn('handoff-a1a1a1a1.md', self.start('a3a3a3a3' * 2, {**desktop('a', 103), 'HANDOFF_HOURS': '0'}))
+
 
 if __name__ == '__main__':
     unittest.main()

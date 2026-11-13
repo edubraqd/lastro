@@ -69,6 +69,13 @@ const S = {
       (transcript ? '; its transcript: ' + transcript + ', grep it for an exact detail, never Read it whole' : '') +
       '. If the user picks up that work, check the transcript and the working tree before acting; otherwise only mention it.',
 
+    // Desktop, nothing of its own loaded: the lineage's newest handoff is past the window. Named with path
+    // and age, not loaded: HANDOFF_HOURS bounds what goes in unasked, and after days the tree has moved on.
+    handoffStale: (p, hours, max) =>
+      'The newest handoff of this session (' + p + ') is ' + hours + ' h old, past the ' + max + ' h window (HANDOFF_HOURS), so it was NOT loaded. ' +
+      'If the user asks to resume (e.g. "continue"), Read it first and check its claims against the working tree before acting: the tree wins. ' +
+      'Otherwise only mention that it exists.',
+
     // Emitted after </handoff>: the hook's own line, not the previous session's notes.
     cut: (n, p) =>
       '[handoff cut at ' + n + ' chars; the rest is in ' + p + ']',
@@ -190,6 +197,11 @@ const S = {
       'A geracao anterior desta sessao (' + sid + ') terminou sem escrever handoff' +
       (transcript ? '; transcript dela: ' + transcript + ', use Grep para um detalhe exato, nunca leia inteiro' : '') +
       '. Se o usuario retomar aquele trabalho, confira o transcript e a arvore antes de agir; senao, so mencione.',
+
+    handoffStale: (p, hours, max) =>
+      'O handoff mais novo desta sessao (' + p + ') tem ' + hours + ' h, fora da janela de ' + max + ' h (HANDOFF_HOURS), e por isso NAO foi carregado. ' +
+      'Se o usuario pedir para retomar (ex.: "segue"), leia-o antes e confira o que ele afirma contra a arvore de trabalho antes de agir: a arvore manda. ' +
+      'Senao, so mencione que ele existe.',
 
     cut: (n, p) =>
       '[handoff cortado em ' + n + ' chars; o resto esta em ' + p + ']',
