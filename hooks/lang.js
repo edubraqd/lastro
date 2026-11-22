@@ -35,6 +35,7 @@ const S = {
       'Before stopping, write a handoff to `' + file + '` (create the folder if missing) with: ' +
       'goal of the session; done, each item with the check that proved it (command + result); pending; ' +
       'exact files (path + what changed); decisions and why, marking which the user approved; ' +
+      'approaches tried and rejected, each with the reason; what is uncertain and what may need rolling back; ' +
       'NEXT SAFE ACTION (one step, no side effects); commands to resume. No prose, no chat history, at most ~60 lines. ' +
       'Then tell the user, in one line, that the handoff is saved and they should run /clear: ' +
       'the new session loads the file by itself.',
@@ -114,7 +115,8 @@ const S = {
       'This session\'s context is at ~' + ctx + ' tokens and a mission is armed (zelador). ' +
       'Write the handoff to `' + file + '` (create the folder if missing) with: goal (the mission, in the user\'s words); ' +
       'done, each item with the check that proved it (command + result); pending; exact files (path + what changed); ' +
-      'decisions and why, marking which the user approved; what is uncertain; ' +
+      'decisions and why, marking which the user approved; approaches tried and rejected, each with the reason; ' +
+      'what is uncertain and what may need rolling back; ' +
       'NEXT SAFE ACTION (one step, no side effects); commands to resume. No prose, no chat history, at most ~60 lines. ' +
       'Then call clear_session with session_id "self" (mcp__ccd_session_mgmt__clear_session) and end the turn: ' +
       'the keeper sends "segue" and the next generation resumes. Exception: a question for the user that changes the design of the project, ' +
@@ -173,6 +175,7 @@ const S = {
       'Antes de parar, escreva o handoff em `' + file + '` (crie a pasta se faltar) com: ' +
       'objetivo da sessao; feito, cada item com a prova (comando + resultado); pendente; ' +
       'arquivos exatos (caminho + o que mudou); decisoes e por que, marcando quais o usuario aprovou; ' +
+      'abordagens tentadas e rejeitadas, cada uma com o motivo; o que esta incerto e o que pode precisar de rollback; ' +
       'PROXIMA ACAO SEGURA (um passo, sem efeito colateral); comandos para retomar. Sem prosa nem historico de conversa, maximo ~60 linhas. ' +
       'Depois diga ao usuario, em uma linha, que o handoff esta salvo e que ele deve rodar /clear: ' +
       'a sessao nova carrega o arquivo sozinha.',
@@ -237,7 +240,8 @@ const S = {
       'Contexto desta sessao esta em ~' + ctx + ' tokens e ha missao armada (zelador). ' +
       'Escreva o handoff em `' + file + '` (crie a pasta se faltar) com: objetivo (a missao, nas palavras do usuario); ' +
       'feito, cada item com a prova (comando + resultado); pendente; arquivos exatos (caminho + o que mudou); ' +
-      'decisoes e por que, marcando quais o usuario aprovou; o que esta incerto; ' +
+      'decisoes e por que, marcando quais o usuario aprovou; abordagens tentadas e rejeitadas, cada uma com o motivo; ' +
+      'o que esta incerto e o que pode precisar de rollback; ' +
       'PROXIMA ACAO SEGURA (um passo, sem efeito colateral); comandos para retomar. Sem prosa nem historico de conversa, maximo ~60 linhas. ' +
       'Depois chame clear_session com session_id "self" (mcp__ccd_session_mgmt__clear_session) e encerre o turno: ' +
       'o zelador manda o "segue" e a geracao seguinte retoma. Excecao: pergunta ao usuario que muda o desenho do projeto, ' +
