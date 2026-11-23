@@ -1,0 +1,11 @@
+{
+  "name": "lastro",
+  "owner": { "name": "edubraqd" },
+  "plugins": [
+    {
+      "name": "clear-segue",
+      "source": "./mods/clear-segue",
+      "description": "Botao Clear + Segue acima do prompt: grava o handoff, roda /clear e retoma sozinho."
+    }
+  ]
+}

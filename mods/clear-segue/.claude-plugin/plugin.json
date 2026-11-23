@@ -1,0 +1,6 @@
+{
+  "name": "clear-segue",
+  "version": "0.1.0",
+  "description": "Botao Clear acima do prompt; depois do /clear ele vira Segue e manda \"segue\".",
+  "types": "./types/index.d.ts"
+}
