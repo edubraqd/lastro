@@ -74,6 +74,22 @@ It leaves `~/.claude/.context-peaks.json`, each project's `.claude/handoff-*.md`
 and `settings.json.bak` (your settings from before the first install); delete
 them by hand for a clean slate. See what would change first: `--dry-run`.
 
+## Clear + Segue button
+
+![Band with the Clear + Segue and Só clear buttons](mods/clear-segue/docs/botao-padrao.png)
+
+A button above the message box: one click writes the handoff, runs `/clear` and
+sends "segue" (carry on). It works without the rest of Lastro. At the Claude
+Code prompt, in a terminal:
+
+```
+/plugin install clear-segue --marketplace edubraqd/lastro
+```
+
+What each button does, the other way to install and the limits (in Portuguese,
+as are the texts the button sends):
+[mods/clear-segue/README.md](mods/clear-segue/README.md).
+
 ## How much you spent
 
 ```bash

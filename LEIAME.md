@@ -73,6 +73,21 @@ num projeto). Ficam para trás `~/.claude/.context-peaks.json`, os
 de antes da primeira instalação); apague à mão para zerar. Ver o que seria
 alterado antes: `--dry-run`.
 
+## Botão Clear + Segue
+
+![Faixa com os botões Clear + Segue e Só clear](mods/clear-segue/docs/botao-padrao.png)
+
+Um botão acima da caixa de mensagem: um clique grava o handoff, roda o `/clear`
+e manda o `segue`. Funciona sem o resto do Lastro. No prompt do Claude Code, no
+terminal:
+
+```
+/plugin install clear-segue --marketplace edubraqd/lastro
+```
+
+Como funciona cada botão, o outro jeito de instalar e os limites:
+[mods/clear-segue/README.md](mods/clear-segue/README.md).
+
 ## Quanto você gastou
 
 ```bash
